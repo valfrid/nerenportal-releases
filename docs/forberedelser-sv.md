@@ -64,4 +64,4 @@ Subdomäner är *ingångar*, inte inloggning. Även om någon känner till en ad
 
 **Fyll aldrig i lösenord, API-token eller hemliga nycklar i det här bladet.**
 
-**Nästa steg:** [Planerad installationsguide](installationsguide-sv.md). Kontrollera först om det finns en signerad version under [GitHub Releases](https://github.com/valfrid/nerenportal-releases/releases).
+**Nästa steg:** Läs [Säkerhetsnycklar och återställning](sakerhet-och-nycklar-sv.md) och sedan [Planerad installationsguide](installationsguide-sv.md). Kontrollera först om det finns en signerad version under [GitHub Releases](https://github.com/valfrid/nerenportal-releases/releases).
