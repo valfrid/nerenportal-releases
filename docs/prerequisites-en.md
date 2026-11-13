@@ -8,7 +8,7 @@
 
 - [ ] **One responsible adult/administrator.** They manage setup, additional devices, backups and technical recovery.
 - [ ] **Your own Cloudflare account**, protected with multifactor authentication. Your family owns its Worker, D1 database and R2 storage.
-- [ ] **A domain you control**, such as `family.example`. You can register it anywhere, but must be able to configure DNS for Cloudflare.
+- [ ] **A domain you control**, such as `family.example`. **Recommended starting point:** a short `.cc` registered through Cloudflare for simpler DNS setup. Existing `.se` or other domains also work with Cloudflare DNS. See [Domain choices](domain-choice-en.md).
 - [ ] **A modern phone or computer supporting passkeys.** The first adult device is enrolled through the secure setup flow.
 - [ ] **Family names and roles.** Decide who is an adult/parent and who is a child, plus optional individual entry points and colors.
 - [ ] **A safe place for recovery details** such as a password manager. Never place secrets in a public document or message.
