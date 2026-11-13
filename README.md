@@ -1,0 +1,50 @@
+# Family Portal — Verified Releases
+
+Public release channel for the generic **Family Portal** (Familjeportalen).
+
+> **Status:** Distribution infrastructure is being prepared. **There is no supported release to install yet.** Do not attempt installation or upgrade until a signed, tested release is published here.
+
+## What this repository contains
+
+Once releases are ready, each immutable `vMAJOR.MINOR.PATCH` GitHub Release will include:
+
+- A reviewed, family-neutral Cloudflare Worker + web assets distribution package.
+- A versioned `release-manifest.json` specifying compatibility and the SHA-256 digest of every asset.
+- An independently verifiable signature for the release manifest.
+- Reviewed D1 migrations, release notes, and an upgrade/rollback compatibility statement.
+
+**Only explicit GitHub Releases are installable.** Do not treat the default branch, a moving archive, or an unverified tag as executable updates.
+
+## How families will receive updates
+
+The family's own Worker checks this repository for new releases (without transmitting family data). A parent/admin can review the changelog and **explicitly approve** an update. A separately authorized deployment component verifies the signature and digest, checks compatibility, creates a backup, and deploys only into that family's own Cloudflare account.
+
+The planned update mechanism does **not** require or use access to the private source repository. GitHub release metadata can be checked without a GitHub token.
+
+## Privacy and security
+
+This repository must **never** contain:
+
+- Family D1 data, private R2 images, calendars, API tokens, passkeys, or OAuth credentials.
+- Pilot-specific Wrangler configuration, Cloudflare account IDs, private domains, or populated database exports.
+- Unreviewed archive dumps of the private development repository.
+
+An update can replace Worker code, but **cannot automatically roll back D1/R2 data**. Migration and backup strategies are required for every release.
+
+## Versioning
+
+| Pattern | Meaning |
+| --- | --- |
+| `v1.0.0` | First verified installable public release (not yet published) |
+| `v1.0.1` | Backward-compatible patch |
+| `v1.1.0` | Backward-compatible feature update |
+| `v2.0.0` | Potentially breaking change with explicit migration plan |
+| `v1.1.0-rc.1` | Pre-release; never delivered as `stable` |
+
+**No release or package is considered valid until all checks, signatures, isolated installation tests, and approval gates have passed.**
+
+## Development
+
+Development and Nerén's existing pilot deployment live in a **separate private repository**. Only audited, family-neutral build outputs are published here.
+
+The release format, installer, updater service, and end-to-end migration tests are being developed separately. They are not yet available in this repository.
