@@ -8,7 +8,7 @@
 
 - [ ] **En vuxen som tar ansvar för installationen.** Personen blir initial administratör, hanterar nya enheter, backup och eventuella tekniska fel.
 - [ ] **Ett eget Cloudflare-konto**, skyddat med tvåfaktorsautentisering. Familjen äger sina Workers, D1 och R2 i detta konto. Ingen utvecklares konto behöver åtkomst till familjens innehåll.
-- [ ] **En egen domän**, t.ex. `familj.example`, som ni kontrollerar. Domänen kan köpas hos valfri registrar; DNS behöver kunna konfigureras enligt installationsguiden för Cloudflare.
+- [ ] **En egen domän**, t.ex. `familj.example`, som ni kontrollerar. **Rekommendation:** välj en kort `.cc` och registrera via Cloudflare för enklare DNS-konfiguration. Har ni redan en `.se` eller annan domän går den också bra med Cloudflare DNS. Läs [Domänval och Cloudflare Registrar](domanval-sv.md).
 - [ ] **En modern telefon eller dator med passkey-stöd** (t.ex. plattformens inbyggda passkey-system). Den första vuxna enheten registreras säkert under installationen.
 - [ ] **Ett familjenamn och en lista över medlemmarna.** Börja med föräldrar/vårdnadshavare och de barn som ska ha varsin vy. Ni bestämmer personnamn, eventuella personliga ingångar och färger.
 - [ ] **Ett ställe att spara återställningsinformation**, till exempel en lösenordshanterare. Här sparas kontoåterställning och installationsnycklar – aldrig i publika dokument eller meddelanden.
