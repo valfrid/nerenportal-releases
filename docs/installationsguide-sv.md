@@ -26,7 +26,9 @@ En installatör ska kunna göra detta utan att klona det privata utvecklingsrepo
 
 ## Steg 1 – förbered domän och konton
 
-Skapa eller välj ert eget Cloudflare-konto och aktivera stark inloggning. Kontrollera att ni förfogar över en domän och kan uppdatera dess DNS-inställningar. Domänregistratorn behöver **inte** vara Cloudflare.
+Skapa eller välj ert eget Cloudflare-konto och aktivera stark inloggning. **Vår rekommendation för en ny familj är en kort `.cc`-domän via Cloudflare Registrar**, eftersom Cloudflare då redan sköter namnservrarna. **Köpet görs manuellt i Cloudflares webbpanel:** `.cc` stöds inte av Registrar-API:t för automatisk registrering. Kontrollera namn och förnyelsepris före köp.
+
+Har ni en befintlig `.se` eller annan domän kan ni behålla den och använda Cloudflare DNS, med namnserverbyte hos befintlig registrar. Kontrollera e-postens DNS-poster före byte. Se [Domänval](domanval-sv.md).
 
 Bestäm familjens huvuddomän och de önskade ingångarna, till exempel `admin.familj.example`, `hall.familj.example` och personliga underdomäner. De måste peka på **er** installation, inte på ett pilotkonto.
 
