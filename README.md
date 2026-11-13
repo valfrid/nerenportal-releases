@@ -8,7 +8,7 @@ Public release channel for the generic **Family Portal** (Familjeportalen).
 
 **[Installation Wizard Demo — open/download HTML](demo/install-wizard.html)**
 
-A self-contained, bilingual (Swedish/English) six-step prototype covering family details, simulated Cloudflare Worker/D1/R2 setup, optional services, security-key explanations, and a final dry-run installation summary.
+A self-contained, bilingual (Swedish/English) seven-step prototype covering family details, simulated Cloudflare Worker/D1/R2 setup, optional services, security-key explanations, and a final dry-run installation summary.
 
 **This is deliberately not connected to Cloudflare:** no API tokens, no OAuth, no network requests, no server-side storage, no secret generation and no cloud modifications. GitHub displays HTML as source; **download the file as `install-wizard.html` and open it in a modern browser** to run the interactive demo. The full prototype is one HTML file without external dependencies.
 
@@ -27,6 +27,7 @@ This demo is not a signed production installer and should not be used to deploy 
 3. [Installationsguide – det planerade steget för steg-flödet](docs/installationsguide-sv.md)
 4. [Säkerhetsnycklar – skapa, lagra och återställa](docs/sakerhet-och-nycklar-sv.md)
 5. [Välj domän – rekommenderad .cc och Cloudflare Registrar](docs/domanval-sv.md)
+6. [Så godkänner familjer Cloudflare-åtkomst – OAuth och API-token](docs/cloudflare-behorighet-sv.md)
 
 **English**
 
@@ -35,6 +36,7 @@ This demo is not a signed production installer and should not be used to deploy 
 3. [Planned installation walkthrough](docs/installation-en.md)
 4. [Security keys — generation, storage, rotation and recovery](docs/security-keys-en.md)
 5. [Choose a domain – .cc recommendation and alternatives](docs/domain-choice-en.md)
+6. [How Cloudflare authorization works for different families](docs/cloudflare-authorization-en.md)
 
 **Important:** These guides are for planning and preparation. No public installer or stable release exists yet. When installation becomes available, the release page will contain version-specific verified instructions.
 
