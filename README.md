@@ -4,6 +4,22 @@ Public release channel for the generic **Family Portal** (Familjeportalen).
 
 > **Status:** Distribution infrastructure is being prepared. **There is no supported release to install yet.** Do not attempt installation or upgrade until a signed, tested release is published here.
 
+## Getting started / Kom igång
+
+**Svenska**
+
+1. [Introduktion – vad Familjeportalen är](docs/introduktion-sv.md)
+2. [Förberedelser – allt ni behöver veta innan installation](docs/forberedelser-sv.md)
+3. [Installationsguide – det planerade steget för steg-flödet](docs/installationsguide-sv.md)
+
+**English**
+
+1. [Introduction – what Family Portal does](docs/intro-en.md)
+2. [Preparation checklist – accounts, domain, family settings and safety](docs/prerequisites-en.md)
+3. [Planned installation walkthrough](docs/installation-en.md)
+
+**Important:** These guides are for planning and preparation. No public installer or stable release exists yet. When installation becomes available, the release page will contain version-specific verified instructions.
+
 ## What this repository contains
 
 Once releases are ready, each immutable `vMAJOR.MINOR.PATCH` GitHub Release will include:
