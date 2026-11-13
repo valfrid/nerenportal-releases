@@ -4,6 +4,16 @@ Public release channel for the generic **Family Portal** (Familjeportalen).
 
 > **Status:** Distribution infrastructure is being prepared. **There is no supported release to install yet.** Do not attempt installation or upgrade until a signed, tested release is published here.
 
+## Try the installation wizard (offline demo)
+
+**[Installation Wizard Demo — open/download HTML](demo/install-wizard.html)**
+
+A self-contained, bilingual (Swedish/English) six-step prototype covering family details, simulated Cloudflare Worker/D1/R2 setup, optional services, security-key explanations, and a final dry-run installation summary.
+
+**This is deliberately not connected to Cloudflare:** no API tokens, no OAuth, no network requests, no server-side storage, no secret generation and no cloud modifications. GitHub displays HTML as source; **download the file as `install-wizard.html` and open it in a modern browser** to run the interactive demo. The full prototype is one HTML file without external dependencies.
+
+This demo is not a signed production installer and should not be used to deploy a real family portal.
+
 ## Getting started / Kom igång
 
 **Svenska**
