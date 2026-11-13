@@ -12,6 +12,10 @@ A self-contained, bilingual (Swedish/English) six-step prototype covering family
 
 **This is deliberately not connected to Cloudflare:** no API tokens, no OAuth, no network requests, no server-side storage, no secret generation and no cloud modifications. GitHub displays HTML as source; **download the file as `install-wizard.html` and open it in a modern browser** to run the interactive demo. The full prototype is one HTML file without external dependencies.
 
+For our internal **domainless `workers.dev` installation lab**, the wizard now includes a link from the final review screen to the **protected manual GitHub Actions installation flow**. Select `Test without a domain` to see it. This is only an authenticated handoff: the public wizard itself cannot run deployments, access Cloudflare, verify that GitHub secrets are present, or carry your entered family information into the lab. The test installer remains fixed to the isolated `family-portal-boot-lab` target.
+
+**A direct "Install" button that securely provisions a family's Cloudflare resources from this wizard is still outstanding.** It needs a separate authorized installation backend, audit trail, explicit approval and recovery handling.
+
 This demo is not a signed production installer and should not be used to deploy a real family portal.
 
 ## Getting started / Kom igång
