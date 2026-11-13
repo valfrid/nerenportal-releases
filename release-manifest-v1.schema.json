@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/valfrid/nerenportal-releases/blob/main/release-manifest-v1.schema.json",
+  "title": "Family Portal signed release manifest v1",
+  "description": "Schema for future externally reviewed signed releases. This schema alone does not authenticate any artifact. Verify its detached signature with a trusted pinned public key.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "product", "channel", "version", "sourceCommit", "publishedAt", "minFromVersion", "requiresMigration", "minSchema", "targetSchema", "files"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "product": {"const": "family-portal"},
+    "channel": {"enum": ["stable", "prerelease"]},
+    "version": {"type": "string", "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"},
+    "sourceCommit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "publishedAt": {"type": "string", "format": "date-time"},
+    "minFromVersion": {"type": "string", "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+    "minSchema": {"type": "integer", "minimum": 0},
+    "targetSchema": {"type": "integer", "minimum": 0},
+    "requiresMigration": {"type": "boolean"},
+    "requiresBindings": {"type": "array", "uniqueItems": true, "maxItems": 30, "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,63}$"}},
+    "minimumUpdaterVersion": {"type": "string", "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+    "notes": {"type": "string", "maxLength": 3000},
+    "files": {
+      "type": "array", "minItems": 1, "maxItems": 100,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["name", "sha256", "bytes"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,150}$", "not": {"pattern": "(^|/)\\.\\.(/|$)"}},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "bytes": {"type": "integer", "minimum": 1, "maximum": 104857600}
+        }
+      }
+    }
+  }
+}
