@@ -26,7 +26,9 @@ Families should not need the private development repository. The installer may n
 
 ## Step 1 — prepare ownership and domain
 
-Set up your Cloudflare account with strong sign-in and control a domain. The domain can be registered elsewhere, as long as you can configure DNS for Cloudflare.
+Set up your Cloudflare account with strong sign-in. **For a new family, we recommend a short `.cc` through Cloudflare Registrar**, so Cloudflare automatically manages the nameservers. **Purchase it manually in Cloudflare's dashboard:** `.cc` registration is not supported by Cloudflare's Registrar API. Check name availability and renewal prices before buying.
+
+If you already have a `.se` or another domain, keep it and configure Cloudflare DNS by changing nameservers at your existing registrar. Review existing email DNS records before switching. See [Domain choices](domain-choice-en.md).
 
 Decide on the main domain and optional subdomains for administration, a home display and family members. Every address must resolve to **your installation**, not a shared demo or another family's pilot.
 
