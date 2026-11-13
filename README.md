@@ -11,12 +11,14 @@ Public release channel for the generic **Family Portal** (Familjeportalen).
 1. [Introduktion – vad Familjeportalen är](docs/introduktion-sv.md)
 2. [Förberedelser – allt ni behöver veta innan installation](docs/forberedelser-sv.md)
 3. [Installationsguide – det planerade steget för steg-flödet](docs/installationsguide-sv.md)
+4. [Säkerhetsnycklar – skapa, lagra och återställa](docs/sakerhet-och-nycklar-sv.md)
 
 **English**
 
 1. [Introduction – what Family Portal does](docs/intro-en.md)
 2. [Preparation checklist – accounts, domain, family settings and safety](docs/prerequisites-en.md)
 3. [Planned installation walkthrough](docs/installation-en.md)
+4. [Security keys — generation, storage, rotation and recovery](docs/security-keys-en.md)
 
 **Important:** These guides are for planning and preparation. No public installer or stable release exists yet. When installation becomes available, the release page will contain version-specific verified instructions.
 
