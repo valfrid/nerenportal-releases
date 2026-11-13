@@ -64,4 +64,4 @@ Subdomains select an entry point; **they do not authenticate a person**. Changin
 
 **Never enter passwords or secret keys into this sheet.**
 
-Next: [Planned installation walkthrough](installation-en.md) and the [GitHub Releases page](https://github.com/valfrid/nerenportal-releases/releases).
+Next: [Security keys and recovery](security-keys-en.md), then the [Planned installation walkthrough](installation-en.md) and the [GitHub Releases page](https://github.com/valfrid/nerenportal-releases/releases).
