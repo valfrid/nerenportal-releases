@@ -22,6 +22,7 @@ This demo is not a signed production installer and should not be used to deploy 
 2. [Förberedelser – allt ni behöver veta innan installation](docs/forberedelser-sv.md)
 3. [Installationsguide – det planerade steget för steg-flödet](docs/installationsguide-sv.md)
 4. [Säkerhetsnycklar – skapa, lagra och återställa](docs/sakerhet-och-nycklar-sv.md)
+5. [Välj domän – rekommenderad .cc och Cloudflare Registrar](docs/domanval-sv.md)
 
 **English**
 
@@ -29,6 +30,7 @@ This demo is not a signed production installer and should not be used to deploy 
 2. [Preparation checklist – accounts, domain, family settings and safety](docs/prerequisites-en.md)
 3. [Planned installation walkthrough](docs/installation-en.md)
 4. [Security keys — generation, storage, rotation and recovery](docs/security-keys-en.md)
+5. [Choose a domain – .cc recommendation and alternatives](docs/domain-choice-en.md)
 
 **Important:** These guides are for planning and preparation. No public installer or stable release exists yet. When installation becomes available, the release page will contain version-specific verified instructions.
 
