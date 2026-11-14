@@ -35,9 +35,9 @@ Arbetsflödet kommer då att:
 4. Kontrollera att inga pilotdatamigrationer eller privata filer följer med.
 5. Jämföra Ed25519-nyckelns publika del mot den **förväntade** publika nyckeln.
 6. Signera exakt release-manifest och kontrollera två SHA-256-hashar.
-7. Skapa ett **utkast** till GitHub Release i det publika repot och lägga till fyra filer:
-   `portal-worker-package.tar.gz`, `schema-migrations.tar.gz`, `release-manifest.json`, `release-manifest.sig`.
-8. Publicera utkastet **endast efter** kontroll att exakt de fyra filerna har laddats upp.
+7. Skapa ett **utkast** till GitHub Release i det publika repot med fem filer:
+   `portal-worker-package.tar.gz`, `schema-migrations.tar.gz`, `release-manifest.json`, `release-manifest.sig` och `build-dependencies.lock.json`. Den sistnämnda är den faktiska npm-låsfil som skapades under releasebygget; dess SHA-256 är med i det signerade manifestets noteringar. Detta är byggspårbarhet utöver signaturen på själva installationsfilerna.
+8. Publicera utkastet **endast efter** kontroll att exakt de fem filerna har laddats upp.
 
 Misslyckas något steg ska releasen inte publiceras. Om ett fel inträffar efter skapande av utkastet stannar utkastet opublicerat för granskning; v1.0.0-taggen ska då inte återanvändas okontrollerat.
 
