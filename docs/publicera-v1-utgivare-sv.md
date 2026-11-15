@@ -25,7 +25,7 @@ Detta är en **engångskonfiguration för portalens utgivare**. Familjer som ins
 
 ## Publicera v1.0.0
 
-Öppna [release-jobbet i GitHub Actions](https://github.com/valfrid/nerenportal-releases/actions/workflows/publish-family-portal-v1.yml). Välj **Run workflow**, branchen `main` och skriv exakt `PUBLISH-SIGNED-FAMILY-V1`.
+Öppna [release-jobbet i GitHub Actions](https://github.com/valfrid/nerenportal-releases/actions/workflows/publish-family-portal-v1.yml). Välj **Run workflow**, branchen `main`, **markera bekräftelserutan** och klicka på den gröna knappen **Run workflow**. Lämna inte bekräftelserutan omarkerad.
 
 Arbetsflödet kommer då att:
 
