@@ -6,9 +6,10 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: "Type PUBLISH-SIGNED-FAMILY-V1"
+        description: "Jag godkänner att signera och publicera Familjeportal v1.0.0"
         required: true
-        type: string
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -37,7 +38,7 @@ jobs:
           PUBLIC_KEY: ${{ vars.RELEASE_SIGNING_PUBLIC_KEY }}
         run: |
           set -euo pipefail
-          test "$PUBLICATION_CONFIRMATION" = "PUBLISH-SIGNED-FAMILY-V1" || { echo "::error::Bekräftelsen måste vara exakt PUBLISH-SIGNED-FAMILY-V1"; exit 1; }
+          test "$PUBLICATION_CONFIRMATION" = "true" || { echo "::error::Markera bekräftelserutan när du startar publiceringen"; exit 1; }
           test "$SOURCE_READ_TOKEN_EXISTS" = true || { echo "::error::Private source read token not configured"; exit 1; }
           test "$SIGNER_EXISTS" = true || { echo "::error::Offline publisher signing key not configured"; exit 1; }
           [[ "$PUBLIC_KEY" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::Pinned public signing key not configured"; exit 1; }
