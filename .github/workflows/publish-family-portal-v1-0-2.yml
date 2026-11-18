@@ -1,0 +1,232 @@
+name: Publish signed Family Portal v1.0.2
+
+# Owner-initiated immutable patch release. Reads a pinned private source
+# commit, builds offline, signs with the existing protected Ed25519 identity,
+# and publishes only the five public release assets. NEVER deploys Cloudflare.
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Approve NEW signed v1.0.2. No family Worker, D1 or R2 changes."
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: signed-family-portal-v1-0-2
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ github.repository == 'valfrid/nerenportal-releases' && github.ref == 'refs/heads/main' && github.actor == 'valfrid' && github.event_name == 'workflow_dispatch' && inputs.confirmation == true }}
+    environment: family-portal-release-publisher
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      RELEASE_TAG: v1.0.2
+      FROZEN_SOURCE_SHA: 23a19202b2cba08d804af5a5e5a7ea2020b2aeed
+      GH_REPO: valfrid/nerenportal-releases
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_TRUST_ROOT: 609cf86cd1d2cc20e333f49c420af4f9c4bbc1771edc50ed1f5fe17fe6a0249a
+
+    steps:
+      - name: Verify owner approval, existing trust root and immutable new release tag
+        env:
+          SIGNER_EXISTS: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY_PEM != '' }}
+          SOURCE_READ_TOKEN_EXISTS: ${{ secrets.PORTAL_SOURCE_READ_TOKEN != '' }}
+          PUBLISHER_PUBLIC_KEY: ${{ vars.RELEASE_SIGNING_PUBLIC_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SIGNER_EXISTS" = true
+          test "$SOURCE_READ_TOKEN_EXISTS" = true
+          test "$PUBLISHER_PUBLIC_KEY" = "$EXPECTED_TRUST_ROOT"
+          test "$RELEASE_TAG" = "v1.0.2"
+          releases=$(gh api "repos/$GH_REPO/releases?per_page=100" --jq '[.[] | select(.tag_name == "v1.0.2")] | length')
+          test "$releases" = 0 || { echo "::error::v1.0.2 release already exists"; exit 1; }
+          if gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::v1.0.2 tag already exists"; exit 1
+          fi
+          echo "Version, publisher identity, source access and approval confirmed."
+
+      - name: Checkout exact reviewed private source commit
+        uses: actions/checkout@v4
+        with:
+          repository: valfrid/nerenportal
+          ref: 23a19202b2cba08d804af5a5e5a7ea2020b2aeed
+          token: ${{ secrets.PORTAL_SOURCE_READ_TOKEN }}
+          path: frozen-source
+          persist-credentials: false
+
+      - name: Verify source identity and domainless enrollment fixes
+        working-directory: frozen-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$FROZEN_SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          test -s src/auth.js
+          test -s src/installation-hosts.js
+          test -s src/release-updates.js
+          test -s tests/domainless-enrollment-links.test.js
+          grep -Fq 'enrollmentUrlFor(' src/auth.js
+          grep -Fq 'isSingleHostWorkersDev' src/installation-hosts.js
+          grep -Fq "redirect:'manual'" src/release-updates.js
+          grep -Fq 'v1.0.1' scripts/releases/build-release.mjs
+          echo "Frozen generic source and registration fixes verified."
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run full source tests and prepare offline immutable v1.0.2 archives
+        working-directory: frozen-source
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --ignore-scripts --no-audit --no-fund
+          node scripts/copy-webauthn-browser.mjs
+          node --test tests/*.test.js
+          node scripts/installer/domainless-lab.mjs --check
+          node scripts/staging/provision.mjs --check
+          node scripts/releases/build-release.mjs --build "$RELEASE_TAG" "$FROZEN_SOURCE_SHA"
+          root=".release-work/$RELEASE_TAG"
+          test -s "$root/portal-worker-package.tar.gz"
+          test -s "$root/schema-migrations.tar.gz"
+          test -s "$root/release-manifest.json"
+          test -s package-lock.json
+
+      - name: Scan Worker, assets and migrations; enforce v1.0.1 upgrade compatibility
+        working-directory: frozen-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=".release-work/$RELEASE_TAG"
+          tar -tzf "$root/portal-worker-package.tar.gz" >/tmp/v102-worker-list
+          tar -tzf "$root/schema-migrations.tar.gz" >/tmp/v102-schema-list
+          if grep -E '(^|/)(\.env|\.git|\.npmrc|node_modules|wrangler\.jsonc|.*\.pem|.*\.key)(/|$)' /tmp/v102-worker-list; then
+            echo "::error::Forbidden private file found in Worker archive"; exit 1
+          fi
+          for forbidden in 0002_seed_family.sql 0006_system_admin.sql 0008_demo_recipes.sql 0013_seed_external_senders.sql 0092_allowance_clean_start_20261102.sql 0101_pilot_home_setting.sql; do
+            if grep -q "/$forbidden" /tmp/v102-schema-list; then
+              echo "::error::Family-specific seed present"; exit 1
+            fi
+          done
+          tar -xOzf "$root/portal-worker-package.tar.gz" ./worker/index.js >/tmp/v102-compiled-worker.js
+          grep -Fq 'sha256-256bit' /tmp/v102-compiled-worker.js
+          if grep -Fq 'pbkdf2-sha256$210000' /tmp/v102-compiled-worker.js; then
+            echo "::error::Unsupported bootstrap hashing in compiled Worker"; exit 1
+          fi
+          test "$(jq -r .version "$root/release-manifest.json")" = "$RELEASE_TAG"
+          test "$(jq -r .sourceCommit "$root/release-manifest.json")" = "$FROZEN_SOURCE_SHA"
+          test "$(jq -r .minFromVersion "$root/release-manifest.json")" = "v1.0.1"
+          test "$(jq -r .minSchema "$root/release-manifest.json")" = "1"
+          test "$(jq -r .targetSchema "$root/release-manifest.json")" = "1"
+          echo "Package scan passed; patch has no schema version change."
+
+      - name: Sign manifest with existing Ed25519 publisher and verify every archive hash
+        working-directory: frozen-source
+        env:
+          RELEASE_SIGNING_PRIVATE_KEY_PEM: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY_PEM }}
+          EXPECTED_PUBLIC_KEY: ${{ vars.RELEASE_SIGNING_PUBLIC_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import {createPrivateKey,createPublicKey} from 'node:crypto';
+          const key=createPrivateKey(process.env.RELEASE_SIGNING_PRIVATE_KEY_PEM);
+          if(key.asymmetricKeyType!=='ed25519')throw Error('Ed25519 publisher required');
+          const der=createPublicKey(key).export({format:'der',type:'spki'});
+          if(der.subarray(0,12).toString('hex')!=='302a300506032b6570032100')
+            throw Error('Unexpected signing public-key format');
+          const publicKey=der.subarray(12).toString('hex');
+          if(publicKey!==process.env.EXPECTED_PUBLIC_KEY ||
+             publicKey!=='609cf86cd1d2cc20e333f49c420af4f9c4bbc1771edc50ed1f5fe17fe6a0249a')
+            throw Error('Pinned v1.0.1 publisher trust root mismatch');
+          NODE
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {createHash} from 'node:crypto';
+          const dir='.release-work/v1.0.2/';
+          const lock=fs.readFileSync('package-lock.json');
+          const digest=createHash('sha256').update(lock).digest('hex');
+          const path=dir+'release-manifest.json';
+          const manifest=JSON.parse(fs.readFileSync(path,'utf8'));
+          if(manifest.version!=='v1.0.2' || manifest.minFromVersion!=='v1.0.1' ||
+             manifest.sourceCommit!==process.env.FROZEN_SOURCE_SHA ||
+             manifest.minSchema!==1 || manifest.targetSchema!==1)
+            throw Error('Unexpected upgrade manifest');
+          manifest.notes.sv='Rättade registreringslänkar och QR-koder på workers.dev. Förbättrad versionskontroll. Inga D1/R2-migreringar. Resolved npm lock SHA-256: '+digest+'.';
+          fs.copyFileSync('package-lock.json',dir+'build-dependencies.lock.json');
+          fs.writeFileSync(path,JSON.stringify(manifest));
+          NODE
+          node scripts/releases/build-release.mjs --sign "$RELEASE_TAG"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {createHash} from 'node:crypto';
+          import {verifySignedRelease,verifyReleaseArtifact} from './src/installer-release.js';
+          const dir='.release-work/v1.0.2/';
+          const raw=fs.readFileSync(dir+'release-manifest.json','utf8');
+          const sig=fs.readFileSync(dir+'release-manifest.sig','utf8');
+          const manifest=await verifySignedRelease(raw,sig,process.env.EXPECTED_PUBLIC_KEY);
+          if(manifest.version!=='v1.0.2'||manifest.sourceCommit!==process.env.FROZEN_SOURCE_SHA ||
+             manifest.minFromVersion!=='v1.0.1'||manifest.minSchema!==1||
+             manifest.targetSchema!==1)
+            throw Error('Unexpected signed v1.0.2 manifest');
+          for(const entry of manifest.artifacts)
+            await verifyReleaseArtifact(new Uint8Array(fs.readFileSync(dir+entry.name)),entry);
+          const lockHash=createHash('sha256').update(fs.readFileSync(dir+'build-dependencies.lock.json')).digest('hex');
+          if(!manifest.notes.sv.includes('Resolved npm lock SHA-256: '+lockHash+'.'))
+            throw Error('Signed dependency lock hash missing');
+          console.log('Ed25519 signature and both release archives verified against pinned source.');
+          NODE
+
+      - name: Create draft, confirm exact five uploaded files, and publish by immutable release ID
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="frozen-source/.release-work/$RELEASE_TAG"
+          cat >/tmp/family-portal-v102-notes.md <<'NOTES'
+          # Family Portal v1.0.2
+
+          **Fixat**
+          - Registreringslänkar och QR-koder för första föräldern och nya enheter på en enda workers.dev-adress.
+          - Offentlig versionskontroll fungerar med Cloudflare Workers och följer inte okända omdirigeringar.
+
+          **Kompatibilitet**
+          - Patch-release från v1.0.1. Ingen ändring av D1-schemaversion; inga datamigreringar eller borttagningar.
+          - Signerat Ed25519-manifest, verifierade SHA-256-digests för Worker och migrationsarkiv, samma publika signeringsnyckel som v1.0.1.
+          - Publicering skapar inte eller uppdaterar någon familjs Worker, D1, R2 eller hemligheter.
+          - Befintliga familjeinstallationer uppdateras **inte automatiskt**. En separat, säkert godkänd deployment krävs.
+          NOTES
+          gh release create "$RELEASE_TAG" \
+            "$root/portal-worker-package.tar.gz" \
+            "$root/schema-migrations.tar.gz" \
+            "$root/release-manifest.json" \
+            "$root/release-manifest.sig" \
+            "$root/build-dependencies.lock.json" \
+            --repo "$GH_REPO" --target main \
+            --title "Family Portal $RELEASE_TAG" \
+            --notes-file /tmp/family-portal-v102-notes.md --draft
+          id=$(gh api "repos/$GH_REPO/releases?per_page=100" --jq '[.[] | select(.tag_name == "v1.0.2")] | .[].id')
+          [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::Cannot identify unique draft release"; exit 1; }
+          test "$(gh api "repos/$GH_REPO/releases/$id" --jq .draft)" = true
+          names=$(gh api "repos/$GH_REPO/releases/$id" --jq '[.assets[].name] | sort | join(",")')
+          test "$names" = "build-dependencies.lock.json,portal-worker-package.tar.gz,release-manifest.json,release-manifest.sig,schema-migrations.tar.gz" || {
+            echo "::error::Unexpected release asset set; draft not published"; exit 1
+          }
+          for name in portal-worker-package.tar.gz schema-migrations.tar.gz release-manifest.json release-manifest.sig build-dependencies.lock.json; do
+            remote_size=$(gh api "repos/$GH_REPO/releases/$id" --jq ".assets[] | select(.name == \"$name\") | .size")
+            local_size=$(wc -c < "$root/$name")
+            test "$remote_size" = "$local_size" || {
+              echo "::error::Uploaded asset size mismatch: $name"; exit 1
+            }
+          done
+          gh api --method PATCH "repos/$GH_REPO/releases/$id" -F draft=false --jq '{id,tag_name,draft,published_at,html_url}'
+          test "$(gh api "repos/$GH_REPO/releases/$id" --jq .draft)" = false
+          echo "Signed v1.0.2 published; family installations and Cloudflare unchanged."
