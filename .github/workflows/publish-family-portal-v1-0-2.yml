@@ -7,10 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: "Approve NEW signed v1.0.2. No family Worker, D1 or R2 changes."
-        type: boolean
+        description: "Choose PUBLISH-V1.0.2 to sign and publish; no Cloudflare changes."
+        type: choice
         required: true
-        default: false
+        options:
+          - DO-NOT-PUBLISH
+          - PUBLISH-V1.0.2
+        default: DO-NOT-PUBLISH
 
 permissions:
   contents: write
@@ -21,7 +24,7 @@ concurrency:
 
 jobs:
   publish:
-    if: ${{ github.repository == 'valfrid/nerenportal-releases' && github.ref == 'refs/heads/main' && github.actor == 'valfrid' && github.event_name == 'workflow_dispatch' && inputs.confirmation == true }}
+    if: ${{ github.repository == 'valfrid/nerenportal-releases' && github.ref == 'refs/heads/main' && github.actor == 'valfrid' && github.event_name == 'workflow_dispatch' }}
     environment: family-portal-release-publisher
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -38,9 +41,14 @@ jobs:
           SIGNER_EXISTS: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY_PEM != '' }}
           SOURCE_READ_TOKEN_EXISTS: ${{ secrets.PORTAL_SOURCE_READ_TOKEN != '' }}
           PUBLISHER_PUBLIC_KEY: ${{ vars.RELEASE_SIGNING_PUBLIC_KEY }}
+          RELEASE_APPROVAL: ${{ inputs.confirmation }}
         shell: bash
         run: |
           set -euo pipefail
+          if [ "$RELEASE_APPROVAL" != "PUBLISH-V1.0.2" ]; then
+            echo "::error::Publicering ej godkänd. Välj PUBLISH-V1.0.2 vid Run workflow."
+            exit 1
+          fi
           test "$SIGNER_EXISTS" = true
           test "$SOURCE_READ_TOKEN_EXISTS" = true
           test "$PUBLISHER_PUBLIC_KEY" = "$EXPECTED_TRUST_ROOT"
