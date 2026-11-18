@@ -45,9 +45,9 @@ jobs:
           }
           steps=$(gh api "repos/$GH_REPO/actions/runs/$VERIFIED_RUN_ID/jobs" \
             --jq '[.jobs[].steps[] | select(.conclusion == "success") | .name] | join("|")')
-          test "$(gh api \"repos/$GH_REPO/actions/runs/$VERIFIED_RUN_ID\" --jq '.event')" = "workflow_dispatch"
-          test "$(gh api \"repos/$GH_REPO/actions/runs/$VERIFIED_RUN_ID\" --jq '.actor.login')" = "valfrid"
-          test "$(gh api \"repos/$GH_REPO/actions/runs/$VERIFIED_RUN_ID\" --jq '.head_sha')" = "$VERIFIED_PUBLISHER_SHA"
+          test "$(gh api "repos/$GH_REPO/actions/runs/$VERIFIED_RUN_ID" --jq '.event')" = "workflow_dispatch"
+          test "$(gh api "repos/$GH_REPO/actions/runs/$VERIFIED_RUN_ID" --jq '.actor.login')" = "valfrid"
+          test "$(gh api "repos/$GH_REPO/actions/runs/$VERIFIED_RUN_ID" --jq '.head_sha')" = "$VERIFIED_PUBLISHER_SHA"
           for required in \
             'Verify release is new and publisher secrets are configured' \
             'Checkout exact tested private source commit' \
