@@ -1,0 +1,199 @@
+name: Publish signed generic Family Portal v1.0.1 bootstrap fix
+
+# New, immutable signed first-install baseline. This does NOT alter v1.0.0.
+# Manual owner approval only. No Cloudflare credentials or family data.
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "I approve signing and publishing NEW generic v1.0.1 (never replace v1.0.0)"
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: signed-family-portal-v1-0-1
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ github.repository == 'valfrid/nerenportal-releases' && github.ref == 'refs/heads/main' && github.actor == 'valfrid' && inputs.confirmation == true }}
+    environment: family-portal-release-publisher
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_REPO: valfrid/nerenportal-releases
+      RELEASE_TAG: v1.0.1
+      FROZEN_SOURCE_SHA: 802d9d98ce7d0633d92cf91ba6145f716b5bd224
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify release is new and publisher secrets are configured
+        env:
+          SIGNER_EXISTS: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY_PEM != '' }}
+          SOURCE_READ_TOKEN_EXISTS: ${{ secrets.PORTAL_SOURCE_READ_TOKEN != '' }}
+          PUBLIC_KEY: ${{ vars.RELEASE_SIGNING_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          test "$SIGNER_EXISTS" = true
+          test "$SOURCE_READ_TOKEN_EXISTS" = true
+          [[ "$PUBLIC_KEY" =~ ^[a-f0-9]{64}$ ]]
+          ! gh release view "$RELEASE_TAG" -R "$GH_REPO" >/dev/null 2>&1 || {
+            echo "::error::v1.0.1 already exists; never rewrite a signed release"; exit 1;
+          }
+          ! gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1 || {
+            echo "::error::v1.0.1 tag already exists"; exit 1;
+          }
+          test "$RELEASE_TAG" != "v1.0.0"
+
+      - name: Checkout exact tested private source commit
+        uses: actions/checkout@v4
+        with:
+          repository: valfrid/nerenportal
+          ref: 802d9d98ce7d0633d92cf91ba6145f716b5bd224
+          token: ${{ secrets.PORTAL_SOURCE_READ_TOKEN }}
+          path: frozen-source
+          persist-credentials: false
+
+      - name: Verify frozen source identity and bootstrap fix
+        working-directory: frozen-source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$FROZEN_SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          grep -q 'sha256-256bit' src/bootstrap-secret.js
+          grep -q 'CUSTOM_ITERATIONS_PER_ROUND=70000' src/bootstrap-secret.js
+          grep -q "v1.0.1" scripts/releases/build-release.mjs
+          test -f scripts/releases/build-release.mjs
+          test -f src/auth.js
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run all source tests and produce offline signed-package candidates
+        working-directory: frozen-source
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          set -euo pipefail
+          npm install --ignore-scripts --no-audit --no-fund
+          node scripts/copy-webauthn-browser.mjs
+          node --test tests/*.test.js
+          node scripts/staging/provision.mjs --check
+          node scripts/releases/build-release.mjs --build "$RELEASE_TAG" "$FROZEN_SOURCE_SHA"
+          test -s ".release-work/$RELEASE_TAG/portal-worker-package.tar.gz"
+          test -s ".release-work/$RELEASE_TAG/schema-migrations.tar.gz"
+          test -s package-lock.json
+
+      - name: Scan new package for secret files, family seeds and the compiled bootstrap fix
+        working-directory: frozen-source
+        run: |
+          set -euo pipefail
+          root=".release-work/$RELEASE_TAG"
+          tar -tzf "$root/portal-worker-package.tar.gz" >/tmp/generic-v101-assets
+          tar -tzf "$root/schema-migrations.tar.gz" >/tmp/generic-v101-schema
+          if grep -E '(^|/)(\.env|\.git|\.npmrc|node_modules|wrangler\.jsonc|.*\.pem|.*\.key)(/|$)' /tmp/generic-v101-assets; then
+            echo "::error::Private or disallowed file in package"; exit 1
+          fi
+          for forbidden in 0002_seed_family.sql 0006_system_admin.sql 0008_demo_recipes.sql 0013_seed_external_senders.sql 0092_allowance_clean_start_20261102.sql 0101_pilot_home_setting.sql; do
+            if grep -q "/$forbidden" /tmp/generic-v101-schema; then
+              echo "::error::Family-specific seed included: $forbidden"; exit 1
+            fi
+          done
+          tar -xOzf "$root/portal-worker-package.tar.gz" ./worker/index.js >/tmp/v101-compiled-worker.js
+          grep -q 'sha256-256bit' /tmp/v101-compiled-worker.js || {
+            echo "::error::Compiled portal missing new generated bootstrap verifier"; exit 1;
+          }
+          if grep -q 'pbkdf2-sha256\$210000' /tmp/v101-compiled-worker.js; then
+            echo "::error::Compiled Worker includes unsupported 210k PBKDF2 verifier"; exit 1;
+          fi
+          test "$(jq -r '.minFromVersion' "$root/release-manifest.json")" = "null"
+          test "$(jq -r '.minSchema' "$root/release-manifest.json")" = "0"
+          test "$(jq -r '.sourceCommit' "$root/release-manifest.json")" = "$FROZEN_SOURCE_SHA"
+
+      - name: Sign immutable files with existing protected Ed25519 publisher identity
+        working-directory: frozen-source
+        env:
+          RELEASE_SIGNING_PRIVATE_KEY_PEM: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY_PEM }}
+          EXPECTED_PUBLIC_KEY: ${{ vars.RELEASE_SIGNING_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import {createPrivateKey,createPublicKey} from 'node:crypto';
+          const privateKey=createPrivateKey(process.env.RELEASE_SIGNING_PRIVATE_KEY_PEM);
+          if(privateKey.asymmetricKeyType!=='ed25519')throw Error('Only Ed25519 publisher accepted');
+          const der=createPublicKey(privateKey).export({format:'der',type:'spki'});
+          const prefix='302a300506032b6570032100';
+          if(der.subarray(0,12).toString('hex')!==prefix)throw Error('Unexpected key format');
+          if(der.subarray(12).toString('hex')!==process.env.EXPECTED_PUBLIC_KEY)
+            throw Error('Publisher trust root mismatch');
+          NODE
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {createHash} from 'node:crypto';
+          const dir='.release-work/v1.0.1/';
+          const lock=fs.readFileSync('package-lock.json');
+          const digest=createHash('sha256').update(lock).digest('hex');
+          const path=dir+'release-manifest.json';
+          const manifest=JSON.parse(fs.readFileSync(path,'utf8'));
+          if(manifest.version!=='v1.0.1'||manifest.minFromVersion!==null||
+             manifest.minSchema!==0||manifest.sourceCommit!==process.env.FROZEN_SOURCE_SHA)
+            throw Error('Wrong first-install release');
+          manifest.notes.sv+=' Resolved npm lock SHA-256: '+digest+'.';
+          fs.copyFileSync('package-lock.json',dir+'build-dependencies.lock.json');
+          fs.writeFileSync(path,JSON.stringify(manifest));
+          NODE
+          node scripts/releases/build-release.mjs --sign "$RELEASE_TAG"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {createHash} from 'node:crypto';
+          import {verifySignedRelease,verifyReleaseArtifact} from './src/installer-release.js';
+          const dir='.release-work/v1.0.1/';
+          const raw=fs.readFileSync(dir+'release-manifest.json','utf8');
+          const sig=fs.readFileSync(dir+'release-manifest.sig','utf8');
+          const manifest=await verifySignedRelease(raw,sig,process.env.EXPECTED_PUBLIC_KEY);
+          if(manifest.version!=='v1.0.1'||manifest.sourceCommit!==process.env.FROZEN_SOURCE_SHA||
+             manifest.minFromVersion!==null||manifest.minSchema!==0)
+            throw Error('Unexpected signed manifest');
+          for(const asset of manifest.artifacts)
+            await verifyReleaseArtifact(new Uint8Array(fs.readFileSync(dir+asset.name)),asset);
+          const digest=createHash('sha256').update(fs.readFileSync(dir+'build-dependencies.lock.json')).digest('hex');
+          if(!manifest.notes.sv.includes('Resolved npm lock SHA-256: '+digest+'.'))
+            throw Error('Missing signed lock digest');
+          console.log('New v1.0.1: trusted publisher, exact source, archive hashes verified.');
+          NODE
+
+      - name: Upload only v1.0.1 as a draft release, verify assets and publish
+        run: |
+          set -euo pipefail
+          root="frozen-source/.release-work/$RELEASE_TAG"
+          cat >/tmp/v101-release-notes.md <<'NOTES'
+          # Family Portal v1.0.1
+
+          First-install fix for Cloudflare Workers bootstrap authentication.
+          The immutable v1.0.0 package uses a PBKDF2 verifier whose iteration
+          count exceeds Cloudflare Workers' per-operation runtime ceiling.
+          This replacement is independently signed from the reviewed generic
+          source commit and includes Worker-compatible bootstrap hashing.
+
+          No existing family, production Worker, database, DNS or R2 is modified
+          by publishing this release. Installation remains a separate approved
+          action through the wizard. The v1.0.0 tag is untouched.
+          NOTES
+          gh release create "$RELEASE_TAG" \
+            "$root/portal-worker-package.tar.gz" \
+            "$root/schema-migrations.tar.gz" \
+            "$root/release-manifest.json" \
+            "$root/release-manifest.sig" \
+            "$root/build-dependencies.lock.json" \
+            --repo "$GH_REPO" --target main \
+            --title "Family Portal $RELEASE_TAG" \
+            --notes-file /tmp/v101-release-notes.md --draft
+          names=$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" \
+            --jq '[.assets[].name] | sort | join(",")')
+          test "$names" = "build-dependencies.lock.json,portal-worker-package.tar.gz,release-manifest.json,release-manifest.sig,schema-migrations.tar.gz"
+          gh release edit "$RELEASE_TAG" --repo "$GH_REPO" --draft=false
+          echo "Published immutable signed $RELEASE_TAG; NO Cloudflare changes."
