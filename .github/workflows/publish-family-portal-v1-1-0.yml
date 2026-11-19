@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 40
     env:
       RELEASE_TAG: v1.1.0
-      FROZEN_SOURCE_SHA: 8fbed571ea5eb1c87a95286075b8801d41b78d77
+      FROZEN_SOURCE_SHA: 5fde5cae26524757c02d7284f59d2017849ca12b
       GH_REPO: valfrid/nerenportal-releases
       GH_TOKEN: ${{ github.token }}
       EXPECTED_TRUST_ROOT: 609cf86cd1d2cc20e333f49c420af4f9c4bbc1771edc50ed1f5fe17fe6a0249a
@@ -56,7 +56,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: valfrid/nerenportal
-          ref: 8fbed571ea5eb1c87a95286075b8801d41b78d77
+          ref: 5fde5cae26524757c02d7284f59d2017849ca12b
           token: ${{ secrets.PORTAL_SOURCE_READ_TOKEN }}
           path: frozen-source
           persist-credentials: false
@@ -72,7 +72,9 @@ jobs:
           echo "57150c71d1588a1a1527a8c852149d5066878deafda0301324dc7261d892bf91  migrations/20261118_sync_dirty_versions.sql" | sha256sum -c -
           grep -Fq "FRESH_BASELINE_VERSION='v1.1.0'" scripts/staging/prepare.mjs
           grep -Fq "FRESH_BASELINE_SCHEMA_REVISION=2" scripts/staging/prepare.mjs
-          echo "Frozen schema and sync trigger source pinned."
+          test -f tests/d1-schema-parity.test.js
+          test -f tests/family-d1-routing.test.js
+          echo "Frozen schema, family-neutral runtime and sync trigger source pinned."
 
       - uses: actions/setup-node@v4
         with:
@@ -104,12 +106,13 @@ jobs:
           if grep -E '(^|/)(\.env|\.git|\.npmrc|node_modules|wrangler\.jsonc|.*\.pem|.*\.key)(/|$)' /tmp/family-v110-worker-list; then
             echo "::error::Forbidden private files in signed package"; exit 1
           fi
-          for forbidden in 0002_seed_family.sql 0006_system_admin.sql 0008_demo_recipes.sql 0013_seed_external_senders.sql 0092_allowance_clean_start_20261102.sql 20261112_portal_issues.sql 20261112_z_central_issues.sql 20261112_zz_issues_oauth.sql; do
+          for forbidden in 0002_seed_family.sql 0006_system_admin.sql 0008_demo_recipes.sql 0013_seed_external_senders.sql 0092_allowance_clean_start_20261102.sql; do
             if grep -Fq "/$forbidden" /tmp/family-v110-schema-list; then
               echo "::error::Pilot-only SQL was included"; exit 1
             fi
           done
-          for required in 20261118_sync_dirty_versions.sql 20261119_family_schema_baseline_v1_1_0.sql; do
+          # Central issue/OAuth *DDL* is universal; only central privileges and data are installation-specific.
+          for required in 20261112_portal_issues.sql 20261112_z_central_issues.sql 20261112_zz_issues_oauth.sql 20261119_a_recipe_oauth_schema.sql 20261118_sync_dirty_versions.sql 20261119_family_schema_baseline_v1_1_0.sql; do
             grep -Fq "/$required" /tmp/family-v110-schema-list || { echo "::error::Missing $required"; exit 1; }
           done
           tar -xOzf "$root/portal-worker-package.tar.gz" ./worker/index.js > /tmp/family-v110-worker.js
