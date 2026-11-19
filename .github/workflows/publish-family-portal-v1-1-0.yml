@@ -6,11 +6,12 @@ on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: "Sign and publish new v1.1.0 fresh-install release. No Cloudflare changes."
+        description: "VERIFY-ONLY tests/signs without publication; PUBLISH creates public v1.1.0. No Cloudflare changes."
         type: choice
         required: true
         options:
           - DO-NOT-PUBLISH
+          - VERIFY-ONLY-V1.1.0
           - PUBLISH-FRESH-V1.1.0
         default: DO-NOT-PUBLISH
 
@@ -23,7 +24,7 @@ concurrency:
 
 jobs:
   publish:
-    if: ${{ github.repository == 'valfrid/nerenportal-releases' && github.ref == 'refs/heads/main' && github.actor == 'valfrid' && github.event_name == 'workflow_dispatch' && inputs.confirmation == 'PUBLISH-FRESH-V1.1.0' }}
+    if: ${{ github.repository == 'valfrid/nerenportal-releases' && github.ref == 'refs/heads/main' && github.actor == 'valfrid' && github.event_name == 'workflow_dispatch' && (inputs.confirmation == 'PUBLISH-FRESH-V1.1.0' || inputs.confirmation == 'VERIFY-ONLY-V1.1.0') }}
     environment: family-portal-release-publisher
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -188,6 +189,7 @@ jobs:
           NODE
 
       - name: Publish immutable signed v1.1.0 release after verifying upload
+        if: ${{ inputs.confirmation == 'PUBLISH-FRESH-V1.1.0' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -232,3 +234,14 @@ jobs:
           gh api --method PATCH "repos/$GH_REPO/releases/$id" -F draft=false --jq '{id,tag_name,draft,published_at,html_url}'
           test "$(gh api "repos/$GH_REPO/releases/$id" --jq .draft)" = false
           echo "Signed fresh-install v1.1.0 published. No Cloudflare resources changed."
+
+      - name: Confirm verify-only job never published or modified Cloudflare
+        if: ${{ inputs.confirmation == 'VERIFY-ONLY-V1.1.0' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GH_REPO/releases?per_page=100" --jq '[.[] | select(.tag_name == "v1.1.0")] | length')" = 0
+          if gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::Verify-only unexpectedly created a tag"; exit 1
+          fi
+          echo "Verified built archives, same Ed25519 trust root, signature, and hashes; nothing published or deployed."
