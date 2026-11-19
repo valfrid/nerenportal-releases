@@ -1,0 +1,231 @@
+name: Publish signed generic Family Portal v1.1.0 (fresh install)
+
+# Immutable, new-family-only release from reviewed private source.
+# Owner-approved; uses existing Ed25519 publisher. Does NOT touch Cloudflare.
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Sign and publish new v1.1.0 fresh-install release. No Cloudflare changes."
+        type: choice
+        required: true
+        options:
+          - DO-NOT-PUBLISH
+          - PUBLISH-FRESH-V1.1.0
+        default: DO-NOT-PUBLISH
+
+permissions:
+  contents: write
+
+concurrency:
+  group: signed-family-portal-v1-1-0
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ github.repository == 'valfrid/nerenportal-releases' && github.ref == 'refs/heads/main' && github.actor == 'valfrid' && github.event_name == 'workflow_dispatch' && inputs.confirmation == 'PUBLISH-FRESH-V1.1.0' }}
+    environment: family-portal-release-publisher
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      RELEASE_TAG: v1.1.0
+      FROZEN_SOURCE_SHA: 8fbed571ea5eb1c87a95286075b8801d41b78d77
+      GH_REPO: valfrid/nerenportal-releases
+      GH_TOKEN: ${{ github.token }}
+      EXPECTED_TRUST_ROOT: 609cf86cd1d2cc20e333f49c420af4f9c4bbc1771edc50ed1f5fe17fe6a0249a
+
+    steps:
+      - name: Require owner, signing key, source access, and unused immutable tag
+        env:
+          SIGNER_EXISTS: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY_PEM != '' }}
+          SOURCE_TOKEN_EXISTS: ${{ secrets.PORTAL_SOURCE_READ_TOKEN != '' }}
+          PUBLISHER_PUBLIC_KEY: ${{ vars.RELEASE_SIGNING_PUBLIC_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SIGNER_EXISTS" = true
+          test "$SOURCE_TOKEN_EXISTS" = true
+          test "$PUBLISHER_PUBLIC_KEY" = "$EXPECTED_TRUST_ROOT"
+          test "$(gh api "repos/$GH_REPO/releases?per_page=100" --jq '[.[] | select(.tag_name == "v1.1.0")] | length')" = 0
+          if gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::Release tag already exists: never overwrite"; exit 1
+          fi
+          echo "Signed publisher and unused v1.1.0 tag verified."
+
+      - name: Check out exact reviewed private main source
+        uses: actions/checkout@v4
+        with:
+          repository: valfrid/nerenportal
+          ref: 8fbed571ea5eb1c87a95286075b8801d41b78d77
+          token: ${{ secrets.PORTAL_SOURCE_READ_TOKEN }}
+          path: frozen-source
+          persist-credentials: false
+
+      - name: Verify frozen source identity and reviewed Nerén sync migration
+        working-directory: frozen-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$FROZEN_SOURCE_SHA"
+          test -f tests/fresh-v1-1-install-schema.test.js
+          test -f migrations/20261118_sync_dirty_versions.sql
+          echo "57150c71d1588a1a1527a8c852149d5066878deafda0301324dc7261d892bf91  migrations/20261118_sync_dirty_versions.sql" | sha256sum -c -
+          grep -Fq "FRESH_BASELINE_VERSION='v1.1.0'" scripts/staging/prepare.mjs
+          grep -Fq "FRESH_BASELINE_SCHEMA_REVISION=2" scripts/staging/prepare.mjs
+          echo "Frozen schema and sync trigger source pinned."
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Test and build unsigned v1.1.0 archive from frozen source
+        working-directory: frozen-source
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --ignore-scripts --no-audit --no-fund
+          node scripts/copy-webauthn-browser.mjs
+          node --test tests/*.test.js
+          node scripts/releases/build-release.mjs --build "$RELEASE_TAG" "$FROZEN_SOURCE_SHA"
+          test -s .release-work/v1.1.0/portal-worker-package.tar.gz
+          test -s .release-work/v1.1.0/schema-migrations.tar.gz
+          test -s .release-work/v1.1.0/release-manifest.json
+
+      - name: Scan immutable package and verify fresh schema revision 2
+        working-directory: frozen-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=".release-work/v1.1.0"
+          tar -tzf "$root/portal-worker-package.tar.gz" > /tmp/family-v110-worker-list
+          tar -tzf "$root/schema-migrations.tar.gz" > /tmp/family-v110-schema-list
+          if grep -E '(^|/)(\.env|\.git|\.npmrc|node_modules|wrangler\.jsonc|.*\.pem|.*\.key)(/|$)' /tmp/family-v110-worker-list; then
+            echo "::error::Forbidden private files in signed package"; exit 1
+          fi
+          for forbidden in 0002_seed_family.sql 0006_system_admin.sql 0008_demo_recipes.sql 0013_seed_external_senders.sql 0092_allowance_clean_start_20261102.sql 20261112_portal_issues.sql 20261112_z_central_issues.sql 20261112_zz_issues_oauth.sql; do
+            if grep -Fq "/$forbidden" /tmp/family-v110-schema-list; then
+              echo "::error::Pilot-only SQL was included"; exit 1
+            fi
+          done
+          for required in 20261118_sync_dirty_versions.sql 20261119_family_schema_baseline_v1_1_0.sql; do
+            grep -Fq "/$required" /tmp/family-v110-schema-list || { echo "::error::Missing $required"; exit 1; }
+          done
+          tar -xOzf "$root/portal-worker-package.tar.gz" ./worker/index.js > /tmp/family-v110-worker.js
+          grep -Fq 'sha256-256bit' /tmp/family-v110-worker.js
+          if grep -Fq 'pbkdf2-sha256$210000' /tmp/family-v110-worker.js; then
+            echo "::error::Unsupported bootstrap hashing"; exit 1
+          fi
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {validateReleaseManifest} from './src/installer-release.js';
+          const dir='.release-work/v1.1.0/';
+          const m=validateReleaseManifest(JSON.parse(fs.readFileSync(dir+'release-manifest.json','utf8')));
+          if(m.version!=='v1.1.0'||m.sourceCommit!==process.env.FROZEN_SOURCE_SHA||
+             m.minFromVersion!==null||m.minSchema!==0||m.targetSchema!==2)
+            throw Error('Unexpected schema version / first-install compatibility');
+          console.log('Validated unsigned new-install manifest schema 0 -> 2');
+          NODE
+
+      - name: Check Ed25519 trust root, sign, and reverify both archive hashes
+        working-directory: frozen-source
+        env:
+          RELEASE_SIGNING_PRIVATE_KEY_PEM: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY_PEM }}
+          EXPECTED_PUBLIC_KEY: ${{ vars.RELEASE_SIGNING_PUBLIC_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import {createPrivateKey,createPublicKey} from 'node:crypto';
+          const key=createPrivateKey(process.env.RELEASE_SIGNING_PRIVATE_KEY_PEM);
+          if(key.asymmetricKeyType!=='ed25519')throw Error('Ed25519 key required');
+          const der=createPublicKey(key).export({format:'der',type:'spki'});
+          if(der.subarray(0,12).toString('hex')!=='302a300506032b6570032100')
+            throw Error('Unexpected Ed25519 public key format');
+          const pub=der.subarray(12).toString('hex');
+          if(pub!==process.env.EXPECTED_PUBLIC_KEY||
+             pub!=='609cf86cd1d2cc20e333f49c420af4f9c4bbc1771edc50ed1f5fe17fe6a0249a')
+            throw Error('Publisher trust root mismatch');
+          NODE
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {createHash} from 'node:crypto';
+          const dir='.release-work/v1.1.0/';
+          const lock=fs.readFileSync('package-lock.json');
+          const hash=createHash('sha256').update(lock).digest('hex');
+          const m=JSON.parse(fs.readFileSync(dir+'release-manifest.json','utf8'));
+          if(m.version!=='v1.1.0'||m.minFromVersion!==null||
+             m.minSchema!==0||m.targetSchema!==2||m.sourceCommit!==process.env.FROZEN_SOURCE_SHA)
+            throw Error('Unexpected first install schema version');
+          m.notes.sv+=' Resolved npm lock SHA-256: '+hash+'.';
+          fs.copyFileSync('package-lock.json',dir+'build-dependencies.lock.json');
+          fs.writeFileSync(dir+'release-manifest.json',JSON.stringify(m));
+          NODE
+          node scripts/releases/build-release.mjs --sign "$RELEASE_TAG"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {createHash} from 'node:crypto';
+          import {verifySignedRelease,verifyReleaseArtifact} from './src/installer-release.js';
+          const dir='.release-work/v1.1.0/';
+          const m=await verifySignedRelease(
+            fs.readFileSync(dir+'release-manifest.json','utf8'),
+            fs.readFileSync(dir+'release-manifest.sig','utf8'),
+            process.env.EXPECTED_PUBLIC_KEY
+          );
+          if(m.version!=='v1.1.0'||m.sourceCommit!==process.env.FROZEN_SOURCE_SHA||
+             m.minFromVersion!==null||m.minSchema!==0||m.targetSchema!==2)
+            throw Error('Unexpected signed baseline');
+          for(const entry of m.artifacts)
+            await verifyReleaseArtifact(new Uint8Array(fs.readFileSync(dir+entry.name)),entry);
+          const lockHash=createHash('sha256').update(fs.readFileSync(dir+'build-dependencies.lock.json')).digest('hex');
+          if(!m.notes.sv.includes('Resolved npm lock SHA-256: '+lockHash+'.'))
+            throw Error('Missing signed dependency provenance');
+          console.log('Trusted signature, two archives and dependency lock confirmed.');
+          NODE
+
+      - name: Publish immutable signed v1.1.0 release after verifying upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="frozen-source/.release-work/$RELEASE_TAG"
+          cat > /tmp/family-v110-notes.md <<'NOTES'
+          # Family Portal v1.1.0 — new-family baseline
+
+          Ny komplett och familjeneutral installationsbas, med färre D1-förfrågningar:
+          30-sekunderssynk, versionstabell, 72 triggers och schemarevision 2.
+
+          **Endast nya familjer:** Detta är en fryst första-installationsbas från
+          granskad källkod. Redan installerade generiska v1.0.x-familjer får
+          INTE någon automatisk databasuppgradering från denna release.
+          En separat familjeägd, signerad uppgraderare byggs senare.
+
+          Signerat Ed25519-manifest, verifierade Worker-/migrations-arkiv och
+          källkodskommithash. Ingen familjs Worker, D1, R2 eller DNS påverkas
+          av själva publiceringen.
+          NOTES
+          gh release create "$RELEASE_TAG" \
+            "$root/portal-worker-package.tar.gz" \
+            "$root/schema-migrations.tar.gz" \
+            "$root/release-manifest.json" \
+            "$root/release-manifest.sig" \
+            "$root/build-dependencies.lock.json" \
+            --repo "$GH_REPO" --target main \
+            --title "Family Portal $RELEASE_TAG" \
+            --notes-file /tmp/family-v110-notes.md --draft
+          id=$(gh api "repos/$GH_REPO/releases?per_page=100" --jq '[.[] | select(.tag_name == "v1.1.0")] | .[].id')
+          [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::Draft release lookup ambiguous"; exit 1; }
+          test "$(gh api "repos/$GH_REPO/releases/$id" --jq .draft)" = true
+          names=$(gh api "repos/$GH_REPO/releases/$id" --jq '[.assets[].name] | sort | join(",")')
+          test "$names" = "build-dependencies.lock.json,portal-worker-package.tar.gz,release-manifest.json,release-manifest.sig,schema-migrations.tar.gz" || {
+            echo "::error::Unexpected release asset set. Draft remains unpublished."; exit 1
+          }
+          for name in portal-worker-package.tar.gz schema-migrations.tar.gz release-manifest.json release-manifest.sig build-dependencies.lock.json; do
+            remote_size=$(gh api "repos/$GH_REPO/releases/$id" --jq ".assets[] | select(.name == \"$name\") | .size")
+            test "$remote_size" = "$(wc -c < "$root/$name")" || {
+              echo "::error::Upload size mismatch for $name. Draft not published."; exit 1
+            }
+          done
+          gh api --method PATCH "repos/$GH_REPO/releases/$id" -F draft=false --jq '{id,tag_name,draft,published_at,html_url}'
+          test "$(gh api "repos/$GH_REPO/releases/$id" --jq .draft)" = false
+          echo "Signed fresh-install v1.1.0 published. No Cloudflare resources changed."
