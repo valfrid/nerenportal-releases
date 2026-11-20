@@ -40,6 +40,7 @@ jobs:
       RELEASE_TAG: ${{ inputs.version }}
       OPERATION: ${{ inputs.operation }}
       EXPECTED_PUBLIC_KEY: ${{ vars.RELEASE_SIGNING_PUBLIC_KEY }}
+      PINNED_SOURCE_INPUT: ${{ inputs.source_sha }}
       SOURCE_TOKEN_PRESENT: ${{ secrets.PORTAL_SOURCE_READ_TOKEN != '' }}
       SIGNING_KEY_PRESENT: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY_PEM != '' }}
       CALLBACK_TOKEN_PRESENT: ${{ secrets.PORTAL_INSTALLER_DISPATCH_TOKEN != '' }}
@@ -58,6 +59,9 @@ jobs:
             test "$SOURCE_TOKEN_PRESENT" = true && test "$SIGNING_KEY_PRESENT" = true || {
               echo "::error::Private source or protected signing key missing"; exit 1;
             }
+          fi
+          if [ -n "$PINNED_SOURCE_INPUT" ] && [[ ! "$PINNED_SOURCE_INPUT" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "::error::Source SHA must be 40 lowercase hex characters"; exit 1
           fi
           if [ "$OPERATION" != 'VERIFY' ] && [ "$CALLBACK_TOKEN_PRESENT" != true ]; then
             echo "::error::Set limited PORTAL_INSTALLER_DISPATCH_TOKEN in release repo BEFORE publishing"; exit 1
@@ -86,8 +90,8 @@ jobs:
           set -euo pipefail
           sha="$(git rev-parse HEAD)"
           [[ "$sha" =~ ^[a-f0-9]{40}$ ]]
-          if [ -n "${{ inputs.source_sha }}" ]; then
-            test "$sha" = "${{ inputs.source_sha }}" || { echo "::error::Pinned source mismatch"; exit 1; }
+          if [ -n "$PINNED_SOURCE_INPUT" ]; then
+            test "$sha" = "$PINNED_SOURCE_INPUT" || { echo "::error::Pinned source mismatch"; exit 1; }
           fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Frozen source: $sha"
@@ -230,7 +234,8 @@ jobs:
     env:
       GH_REPO: valfrid/nerenportal-releases
       RELEASE_TAG: ${{ inputs.version }}
-      GH_TOKEN: ${{ secrets.PORTAL_INSTALLER_DISPATCH_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_DISPATCH_TOKEN: ${{ secrets.PORTAL_INSTALLER_DISPATCH_TOKEN }}
       PUBLIC_SIGNING_KEY: 609cf86cd1d2cc20e333f49c420af4f9c4bbc1771edc50ed1f5fe17fe6a0249a
     steps:
       - uses: actions/setup-node@v4
@@ -241,7 +246,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$GH_TOKEN" || { echo "::error::Source Actions-write dispatch token missing"; exit 1; }
+          test -n "$SOURCE_DISPATCH_TOKEN" || { echo "::error::Source Actions-write dispatch token missing"; exit 1; }
           test "$(gh api -H 'Accept: application/vnd.github+json' "repos/$GH_REPO/releases/tags/$RELEASE_TAG" --jq '.draft')" = false
           mkdir -p /tmp/published
           gh release download "$RELEASE_TAG" --repo "$GH_REPO" -p release-manifest.json -p release-manifest.sig -D /tmp/published
@@ -275,7 +280,7 @@ jobs:
             '{event_type:"family-portal-release-published",
               client_payload:{version:$v,source_commit:$s,publisher_run_id:$id}}' \
             >/tmp/installer-dispatch.json
-          gh api --method POST repos/valfrid/nerenportal/dispatches --input /tmp/installer-dispatch.json
+          GH_TOKEN="$SOURCE_DISPATCH_TOKEN" gh api --method POST repos/valfrid/nerenportal/dispatches --input /tmp/installer-dispatch.json
           echo "Sent signed release callback to private portal CI (no Cloudflare credential in publisher)."
       - name: Require Installer delivery callback to complete successfully
         shell: bash
@@ -284,7 +289,7 @@ jobs:
           id=''
           expected="Installer delivery from release run $GITHUB_RUN_ID"
           for n in $(seq 1 20); do
-            id=$(gh api 'repos/valfrid/nerenportal/actions/runs?event=repository_dispatch&per_page=50' \
+            id=$(GH_TOKEN="$SOURCE_DISPATCH_TOKEN" gh api 'repos/valfrid/nerenportal/actions/runs?event=repository_dispatch&per_page=50' \
               --jq ".workflow_runs[] | select(.display_title == \"$expected\") | .id" | head -n1)
             if [[ "$id" =~ ^[0-9]+$ ]]; then break; fi
             sleep 5
@@ -292,7 +297,7 @@ jobs:
           [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::Installer callback run not found"; exit 1; }
           echo "Installer delivery CI run: https://github.com/valfrid/nerenportal/actions/runs/$id"
           for n in $(seq 1 90); do
-            result=$(gh api "repos/valfrid/nerenportal/actions/runs/$id")
+            result=$(GH_TOKEN="$SOURCE_DISPATCH_TOKEN" gh api "repos/valfrid/nerenportal/actions/runs/$id")
             state=$(jq -r '.status' <<< "$result")
             if [ "$state" = completed ]; then
               outcome=$(jq -r '.conclusion' <<< "$result")
