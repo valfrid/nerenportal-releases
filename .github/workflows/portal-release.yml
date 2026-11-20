@@ -6,18 +6,18 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: "VERIFY tests offline; PUBLISH signs, publishes and updates Installer; RETRY-INSTALLER safely resumes delivery"
+        description: "PUBLISH verifies, signs and publishes in ONE run; VERIFY tests only; RETRY-INSTALLER resumes delivery"
         type: choice
         required: true
         options: [VERIFY, PUBLISH, RETRY-INSTALLER]
-        default: VERIFY
+        default: PUBLISH
       version:
         description: "Optional: automatically uses next patch version (for example v1.1.2). Required only for old-release retry"
         type: string
         required: false
         default: ''
       source_sha:
-        description: "Optional: source main SHA is resolved at VERIFY and pinned for PUBLISH"
+        description: "Optional: auto-pins private main SHA at start of THIS run"
         type: string
         required: false
         default: ''
@@ -73,14 +73,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Resolve automatic version and provenance
+      - name: Pin automatic version and private source SHA for this run
         id: candidate
         env:
           PRIVATE_SOURCE_TOKEN: ${{ secrets.PORTAL_SOURCE_READ_TOKEN }}
           MANUAL_VERSION: ${{ inputs.version }}
           MANUAL_SOURCE_SHA: ${{ inputs.source_sha }}
         run: node scripts/resolve-release-candidate.mjs
-      - name: Require reviewed version, protected trust root and delivery capability
+      - name: Require stable version, protected trust root and delivery capability
         shell: bash
         run: |
           set -euo pipefail
@@ -103,7 +103,7 @@ jobs:
           fi
           if [ "$OPERATION" = PUBLISH ]; then
             if [ -z "$PINNED_SOURCE_INPUT" ]; then
-              echo "::error::PUBLISH must resolve a prior verified source SHA"; exit 1
+              echo "::error::PUBLISH must resolve its pinned source SHA"; exit 1
             fi
             # Drafts may not yet have a Git ref or be visible via /releases/tags.
             # Always inspect release entries (including drafts) before create.
@@ -218,7 +218,7 @@ jobs:
             await verifyReleaseArtifact(new Uint8Array(fs.readFileSync(dir+a.name)),a);
           console.log('Ed25519 + both archive digests verified');
           NODE
-      - name: Store exact verified candidate for later PUBLISH
+      - name: Archive dry-run VERIFY provenance for optional audit
         if: ${{ inputs.operation == 'VERIFY' }}
         env:
           RESOLVED_VERSION: ${{ steps.candidate.outputs.version }}
@@ -246,8 +246,9 @@ jobs:
           dir="frozen-source/.release-work/$RELEASE_TAG"
           cat >/tmp/portal-release-notes.md <<'NOTES'
           # Family Portal — signed universal release
-          Family-neutral Worker and clean schema-2 installation. Signatures,
-          binary SHA-256 and source commit have been checked independently.
+          Family-neutral Worker and clean schema-2 installation. Regression tests,
+          signing identity, Ed25519 signature, archive SHA-256 and exact source
+          commit were verified in the same workflow run before publication.
           No family Worker/D1 was changed by this publication.
           Installer is updated by the subsequent audited delivery job.
           NOTES
