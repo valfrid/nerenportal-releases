@@ -1,0 +1,68 @@
+name: Recover verified v1.1.0 release draft
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        type: choice
+        required: true
+        description: "Only publish the existing, pinned v1.1.0 draft; do not create a new one"
+        options:
+          - DO-NOT-PUBLISH
+          - PUBLISH-VERIFIED-V1.1.0-DRAFT
+        default: DO-NOT-PUBLISH
+permissions:
+  contents: write
+concurrency:
+  group: signed-family-portal-v1-1-0
+  cancel-in-progress: false
+jobs:
+  recover:
+    if: ${{ github.repository == 'valfrid/nerenportal-releases' && github.ref == 'refs/heads/main' && github.actor == 'valfrid' && github.event_name == 'workflow_dispatch' && inputs.confirmation == 'PUBLISH-VERIFIED-V1.1.0-DRAFT' }}
+    environment: family-portal-release-publisher
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_REPO: valfrid/nerenportal-releases
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: v1.1.0
+      DRAFT_ID: '452469617'
+    steps:
+      - name: Verify pinned draft metadata and all five asset digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "::error::Release tag already exists; abort"; exit 1
+          fi
+          release=$(gh api "repos/$GH_REPO/releases/$DRAFT_ID")
+          jq -e --arg tag "$RELEASE_TAG" --argjson id "$DRAFT_ID" '
+            .id == $id and .tag_name == $tag and .draft == true and
+            .target_commitish == "main" and .name == "Family Portal v1.1.0" and
+            ([.assets[].name] | sort) ==
+            ["build-dependencies.lock.json","portal-worker-package.tar.gz",
+             "release-manifest.json","release-manifest.sig","schema-migrations.tar.gz"]
+          ' <<< "$release" > /dev/null
+          while read -r name size digest; do
+            remote=$(jq -er --arg n "$name" '
+              .assets[] | select(.name==$n and .state=="uploaded") |
+              [.size,.digest] | @tsv
+            ' <<< "$release")
+            test "$remote" = "$(printf '%s\t%s' "$size" "$digest")" || {
+              echo "::error::Asset SHA-256 or size differs: $name"; exit 1
+            }
+          done <<'EXPECTED'
+          build-dependencies.lock.json 81562 sha256:30052086a287d62ef2fd1a14033ce9f1f375b52a2c8a2dbda9f6c30f26579af2
+          portal-worker-package.tar.gz 828652 sha256:12275aa4f9b185788418fd4c3bd45420b7ef4adf3859e29b94282b4ede7fe9cb
+          release-manifest.json 673 sha256:bf234c014decb2b43338c70b0a278e097db0320fb63e16022447a1e4acef13c4
+          release-manifest.sig 86 sha256:1b6ec9353af2e313de32629dffed5e7da8e65fd7261642f8f405fd3e6f9a989c
+          schema-migrations.tar.gz 9969 sha256:9e4a1d2897ab0b158130f1e7e6556dba8f4f77137f0b0b7a05adf064af6341c5
+          EXPECTED
+          echo "All five assets match exact pinned GitHub SHA-256 and sizes."
+      - name: Finalize the EXISTING draft without rebuilding or touching D1
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --method PATCH "repos/$GH_REPO/releases/$DRAFT_ID" \
+            -F draft=false --jq '{id,tag_name,draft,published_at,html_url}'
+          test "$(gh api "repos/$GH_REPO/releases/$DRAFT_ID" --jq .draft)" = false
+          echo "Published existing signed v1.1.0 draft. No Cloudflare change."
