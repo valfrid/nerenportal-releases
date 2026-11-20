@@ -263,7 +263,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$SOURCE_DISPATCH_TOKEN" || { echo "::error::Source Actions-write dispatch token missing"; exit 1; }
+          test -n "$SOURCE_DISPATCH_TOKEN" || { echo "::error::Source Actions-write workflow dispatch token missing"; exit 1; }
           test "$(gh api -H 'Accept: application/vnd.github+json' "repos/$GH_REPO/releases/tags/$RELEASE_TAG" --jq '.draft')" = false
           mkdir -p /tmp/published
           gh release download "$RELEASE_TAG" --repo "$GH_REPO" -p release-manifest.json -p release-manifest.sig -D /tmp/published
@@ -294,11 +294,11 @@ jobs:
         run: |
           set -euo pipefail
           jq -n --arg v "$RELEASE_TAG" --arg s "$VERIFIED_SOURCE_SHA" --arg id "$GITHUB_RUN_ID" \
-            '{event_type:"family-portal-release-published",
-              client_payload:{version:$v,source_commit:$s,publisher_run_id:$id}}' \
+            '{ref:"main",inputs:{operation:"DELIVER-INSTALLER-RELEASE",
+              release_version:$v,release_source_commit:$s,publisher_run_id:$id}}' \
             >/tmp/installer-dispatch.json
-          GH_TOKEN="$SOURCE_DISPATCH_TOKEN" gh api --method POST repos/valfrid/nerenportal/dispatches --input /tmp/installer-dispatch.json
-          echo "Sent signed release callback to private portal CI (no Cloudflare credential in publisher)."
+          GH_TOKEN="$SOURCE_DISPATCH_TOKEN" gh api --method POST repos/valfrid/nerenportal/actions/workflows/portal-build.yml/dispatches --input /tmp/installer-dispatch.json
+          echo "Requested signed release delivery using narrowly scoped Actions-write token; no Cloudflare token exposed."
       - name: Require Installer delivery callback to complete successfully
         shell: bash
         run: |
@@ -306,7 +306,7 @@ jobs:
           id=''
           expected="Installer delivery from release run $GITHUB_RUN_ID"
           for n in $(seq 1 20); do
-            id=$(GH_TOKEN="$SOURCE_DISPATCH_TOKEN" gh api 'repos/valfrid/nerenportal/actions/runs?event=repository_dispatch&per_page=50' \
+            id=$(GH_TOKEN="$SOURCE_DISPATCH_TOKEN" gh api 'repos/valfrid/nerenportal/actions/runs?event=workflow_dispatch&per_page=50' \
               --jq ".workflow_runs[] | select(.display_title == \"$expected\") | .id" | head -n1)
             if [[ "$id" =~ ^[0-9]+$ ]]; then break; fi
             sleep 5
