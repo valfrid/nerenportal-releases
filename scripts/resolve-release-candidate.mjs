@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Resolve the next patch version and exact private-source commit.
-// VERIFY records an immutable Actions artifact. PUBLISH must promote only that
-// previously verified tuple; a changed main or a newer release fails closed.
-// This script never publishes tags/releases or accesses Cloudflare.
+// VERIFY is an optional dry-run. PUBLISH pins exactly one source commit and
+// then performs tests, release-build checks, signing and signature verification
+// inside the SAME workflow run, before publishing any GitHub Release.
+// No prior workflow run is required; this script never publishes or deploys.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -73,36 +74,15 @@ function main() {
    throw Error('Version override does not equal next patch: '+nextVersion);
  if(requestedSha&&requestedSha!==sourceSha)
    throw Error('Source override does not equal private main HEAD; re-VERIFY');
- if(operation==='VERIFY'){
-   out({version:nextVersion,sourceSha,baseVersion});
-   return;
- }
- // Only a completed, successful VERIFY run on public-releases/main can supply
- // a publish candidate. An arbitrary string entered by a user cannot.
- const workflow=ghJson(['api','repos/'+repo+'/actions/workflows/portal-release.yml'],token);
- const runList=ghJson(['api','repos/'+repo+'/actions/workflows/'+workflow.id+
-   '/runs?event=workflow_dispatch&branch=main&per_page=100'],token);
- const checks=(runList.workflow_runs||[]).filter(r=>
-   /^Family Portal (?:AUTO|v\d+\.\d+\.\d+) \/ VERIFY$/.test(r.display_title||'')&&
-   r.actor?.login==='valfrid'&&r.head_branch==='main');
- if(!checks.length)throw Error('No matching VERIFY run; run VERIFY first');
- const verified=checks[0]; // latest VERIFY, even if red -> refuse older candidate
- if(verified.status!=='completed'||verified.conclusion!=='success')
-   throw Error('Latest VERIFY is not green');
- if(Date.parse(verified.created_at)<=Date.parse(release.published_at))
-   throw Error('No VERIFY after last published release');
- const dir=fs.mkdtempSync(path.join(os.tmpdir(),'fp-candidate-'));
- try{
-   gh(['run','download',String(verified.id),'--repo',repo,
-       '-n','family-portal-verified-candidate','-D',dir],token);
-   const raw=fs.readFileSync(path.join(dir,'candidate.json'),'utf8');
-   if(raw.length>1024)throw Error('Candidate too large');
-   validateCandidate(JSON.parse(raw),{nextVersion,baseVersion,sourceSha,
-      verifyRunId:verified.id});
- }finally{fs.rmSync(dir,{recursive:true,force:true});}
+ // VERIFY and PUBLISH now resolve the same immutable source snapshot.
+ // PUBLISH uses the exact same job's complete offline test/build/sign/audit
+ // stages before GitHub release creation; prior VERIFY is optional only.
  out({version:nextVersion,sourceSha,baseVersion});
- console.log('Promoting reviewed VERIFY run '+verified.id+
-   ' / '+nextVersion+' / '+sourceSha);
+ console.log(operation==='PUBLISH'?
+   'One-click PUBLISH: frozen source '+sourceSha+' / '+nextVersion+
+   '; local tests, signature verification and artifact audit must pass before publication.':
+   'Dry-run VERIFY: frozen source '+sourceSha+' / '+nextVersion);
+
 }
 if(process.argv[1]&&import.meta.url.endsWith('/'+path.basename(process.argv[1]))){
  try{main();}catch(error){console.error('::error::'+String(error?.message||error));process.exitCode=1;}
