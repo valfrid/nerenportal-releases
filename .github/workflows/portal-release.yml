@@ -16,7 +16,7 @@ on:
         type: string
         required: true
       source_sha:
-        description: "Optional full private source commit SHA; blank uses main. Ignored for RETRY-INSTALLER."
+        description: "40-char source SHA (REQUIRED for PUBLISH; VERIFY may leave blank for latest main)"
         type: string
         required: false
         default: ''
@@ -84,6 +84,9 @@ jobs:
             echo "::error::Set limited PORTAL_INSTALLER_DISPATCH_TOKEN in release repo BEFORE publishing"; exit 1
           fi
           if [ "$OPERATION" = PUBLISH ]; then
+            if [ -z "$PINNED_SOURCE_INPUT" ]; then
+              echo "::error::PUBLISH requires the exact 40-character SHA reviewed by VERIFY and Nerén pilot"; exit 1
+            fi
             # Drafts may not yet have a Git ref or be visible via /releases/tags.
             # Always inspect release entries (including drafts) before create.
             existing=$(gh api "repos/$GH_REPO/releases?per_page=100" \
