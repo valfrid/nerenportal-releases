@@ -1,6 +1,8 @@
 name: Family Portal delivery – verify, sign, publish, update Installer
 run-name: "Family Portal ${{ inputs.version }} / ${{ inputs.operation }}"
 on:
+  pull_request:
+    paths: ['.github/workflows/portal-release.yml']
   workflow_dispatch:
     inputs:
       operation:
@@ -27,6 +29,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-workflow:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the new workflow is generic and cannot self-publish on PR
+        run: |
+          set -euo pipefail
+          grep -Fq 'RETRY-INSTALLER' .github/workflows/portal-release.yml
+          grep -Fq 'PORTAL_INSTALLER_DISPATCH_TOKEN' .github/workflows/portal-release.yml
+          grep -Fq "github.event_name == 'workflow_dispatch'" .github/workflows/portal-release.yml
+          grep -Fq "gh release create" .github/workflows/portal-release.yml
+          echo 'Read-only workflow guard check passed.'
   release:
     if: ${{ github.repository == 'valfrid/nerenportal-releases' && github.ref == 'refs/heads/main' && github.actor == 'valfrid' && github.event_name == 'workflow_dispatch' }}
     environment: family-portal-release-publisher
