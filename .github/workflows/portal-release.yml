@@ -1,5 +1,5 @@
 name: Family Portal delivery – verify, sign, publish, update Installer
-run-name: "Family Portal ${{ inputs.version }} / ${{ inputs.operation }}"
+run-name: "Family Portal ${{ inputs.version || 'AUTO' }} / ${{ inputs.operation }}"
 on:
   pull_request:
     paths: ['.github/workflows/portal-release.yml']
@@ -12,17 +12,19 @@ on:
         options: [VERIFY, PUBLISH, RETRY-INSTALLER]
         default: VERIFY
       version:
-        description: "New immutable SemVer (for example v1.1.1)"
+        description: "Optional: automatically uses next patch version (for example v1.1.2). Required only for old-release retry"
         type: string
-        required: true
+        required: false
+        default: ''
       source_sha:
-        description: "40-char source SHA (REQUIRED for PUBLISH; VERIFY may leave blank for latest main)"
+        description: "Optional: source main SHA is resolved at VERIFY and pinned for PUBLISH"
         type: string
         required: false
         default: ''
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: signed-family-portal-${{ inputs.version }}
@@ -41,6 +43,7 @@ jobs:
           set -euo pipefail
           grep -Fq 'RETRY-INSTALLER' .github/workflows/portal-release.yml
           grep -Fq 'PORTAL_INSTALLER_DISPATCH_TOKEN' .github/workflows/portal-release.yml
+          node --test scripts/resolve-release-candidate.test.mjs
           grep -Fq "github.event_name == 'workflow_dispatch'" .github/workflows/portal-release.yml
           grep -Fq "gh release create" .github/workflows/portal-release.yml
           echo 'Read-only workflow guard check passed.'
@@ -51,6 +54,7 @@ jobs:
     timeout-minutes: 35
     outputs:
       source_sha: ${{ steps.source.outputs.sha }}
+      version: ${{ steps.candidate.outputs.version }}
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: valfrid/nerenportal-releases
@@ -62,6 +66,20 @@ jobs:
       SIGNING_KEY_PRESENT: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY_PEM != '' }}
       CALLBACK_TOKEN_PRESENT: ${{ secrets.PORTAL_INSTALLER_DISPATCH_TOKEN != '' }}
     steps:
+      - name: Checkout publisher implementation
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Resolve automatic version and provenance
+        id: candidate
+        env:
+          PRIVATE_SOURCE_TOKEN: ${{ secrets.PORTAL_SOURCE_READ_TOKEN }}
+          MANUAL_VERSION: ${{ inputs.version }}
+          MANUAL_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: node scripts/resolve-release-candidate.mjs
       - name: Require reviewed version, protected trust root and delivery capability
         shell: bash
         run: |
@@ -85,7 +103,7 @@ jobs:
           fi
           if [ "$OPERATION" = PUBLISH ]; then
             if [ -z "$PINNED_SOURCE_INPUT" ]; then
-              echo "::error::PUBLISH requires the exact 40-character SHA reviewed by VERIFY and Nerén pilot"; exit 1
+              echo "::error::PUBLISH must resolve a prior verified source SHA"; exit 1
             fi
             # Drafts may not yet have a Git ref or be visible via /releases/tags.
             # Always inspect release entries (including drafts) before create.
@@ -103,7 +121,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: valfrid/nerenportal
-          ref: ${{ inputs.source_sha || 'main' }}
+          ref: ${{ steps.candidate.outputs.source_sha }}
           token: ${{ secrets.PORTAL_SOURCE_READ_TOKEN }}
           path: frozen-source
           persist-credentials: false
@@ -200,6 +218,26 @@ jobs:
             await verifyReleaseArtifact(new Uint8Array(fs.readFileSync(dir+a.name)),a);
           console.log('Ed25519 + both archive digests verified');
           NODE
+      - name: Store exact verified candidate for later PUBLISH
+        if: ${{ inputs.operation == 'VERIFY' }}
+        env:
+          RESOLVED_VERSION: ${{ steps.candidate.outputs.version }}
+          VERIFIED_SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          BASE_VERSION: ${{ steps.candidate.outputs.base_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/portal-verified-candidate
+          jq -n --arg v "$RESOLVED_VERSION" --arg s "$VERIFIED_SOURCE_SHA" \
+            --arg b "$BASE_VERSION" --argjson id "$GITHUB_RUN_ID" \
+            '{version:$v,sourceSha:$s,baseVersion:$b,verifyRunId:$id}' \
+            > /tmp/portal-verified-candidate/candidate.json
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.operation == 'VERIFY' }}
+        with:
+          name: family-portal-verified-candidate
+          path: /tmp/portal-verified-candidate/candidate.json
+          retention-days: 30
+          if-no-files-found: error
       - name: Publish immutable signed release ONLY after exact upload hash audit
         if: ${{ inputs.operation == 'PUBLISH' }}
         shell: bash
@@ -258,7 +296,7 @@ jobs:
     timeout-minutes: 35
     env:
       GH_REPO: valfrid/nerenportal-releases
-      RELEASE_TAG: ${{ inputs.version }}
+      RELEASE_TAG: ${{ needs.release.outputs.version }}
       GH_TOKEN: ${{ github.token }}
       SOURCE_DISPATCH_TOKEN: ${{ secrets.PORTAL_INSTALLER_DISPATCH_TOKEN }}
       PUBLIC_SIGNING_KEY: 609cf86cd1d2cc20e333f49c420af4f9c4bbc1771edc50ed1f5fe17fe6a0249a
