@@ -1,0 +1,306 @@
+name: Family Portal delivery – verify, sign, publish, update Installer
+run-name: "Family Portal ${{ inputs.version }} / ${{ inputs.operation }}"
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "VERIFY tests offline; PUBLISH signs, publishes and updates Installer; RETRY-INSTALLER safely resumes delivery"
+        type: choice
+        required: true
+        options: [VERIFY, PUBLISH, RETRY-INSTALLER]
+        default: VERIFY
+      version:
+        description: "New immutable SemVer (for example v1.1.1)"
+        type: string
+        required: true
+      source_sha:
+        description: "Optional full private source commit SHA; blank uses main. Ignored for RETRY-INSTALLER."
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: signed-family-portal-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: ${{ github.repository == 'valfrid/nerenportal-releases' && github.ref == 'refs/heads/main' && github.actor == 'valfrid' && github.event_name == 'workflow_dispatch' }}
+    environment: family-portal-release-publisher
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: valfrid/nerenportal-releases
+      RELEASE_TAG: ${{ inputs.version }}
+      OPERATION: ${{ inputs.operation }}
+      EXPECTED_PUBLIC_KEY: ${{ vars.RELEASE_SIGNING_PUBLIC_KEY }}
+      SOURCE_TOKEN_PRESENT: ${{ secrets.PORTAL_SOURCE_READ_TOKEN != '' }}
+      SIGNING_KEY_PRESENT: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY_PEM != '' }}
+      CALLBACK_TOKEN_PRESENT: ${{ secrets.PORTAL_INSTALLER_DISPATCH_TOKEN != '' }}
+    steps:
+      - name: Require reviewed version, protected trust root and delivery capability
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo "::error::Invalid semantic version"; exit 1;
+          }
+          test "$EXPECTED_PUBLIC_KEY" = '609cf86cd1d2cc20e333f49c420af4f9c4bbc1771edc50ed1f5fe17fe6a0249a' || {
+            echo "::error::Pinned Ed25519 public trust root differs"; exit 1;
+          }
+          if [ "$OPERATION" != 'RETRY-INSTALLER' ]; then
+            test "$SOURCE_TOKEN_PRESENT" = true && test "$SIGNING_KEY_PRESENT" = true || {
+              echo "::error::Private source or protected signing key missing"; exit 1;
+            }
+          fi
+          if [ "$OPERATION" != 'VERIFY' ] && [ "$CALLBACK_TOKEN_PRESENT" != true ]; then
+            echo "::error::Set limited PORTAL_INSTALLER_DISPATCH_TOKEN in release repo BEFORE publishing"; exit 1
+          fi
+          if [ "$OPERATION" = PUBLISH ]; then
+            if gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" >/dev/null 2>&1 ||
+               gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+              echo "::error::Version already exists; refuse to overwrite signed artifacts. Use RETRY-INSTALLER for an already published version."
+              exit 1
+            fi
+          fi
+      - name: Checkout exact private source from reviewed main or pinned commit
+        if: ${{ inputs.operation != 'RETRY-INSTALLER' }}
+        uses: actions/checkout@v4
+        with:
+          repository: valfrid/nerenportal
+          ref: ${{ inputs.source_sha || 'main' }}
+          token: ${{ secrets.PORTAL_SOURCE_READ_TOKEN }}
+          path: frozen-source
+          persist-credentials: false
+      - name: Pin source commit and reject unexpected ref
+        id: source
+        if: ${{ inputs.operation != 'RETRY-INSTALLER' }}
+        working-directory: frozen-source
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          [[ "$sha" =~ ^[a-f0-9]{40}$ ]]
+          if [ -n "${{ inputs.source_sha }}" ]; then
+            test "$sha" = "${{ inputs.source_sha }}" || { echo "::error::Pinned source mismatch"; exit 1; }
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Frozen source: $sha"
+      - uses: actions/setup-node@v4
+        if: ${{ inputs.operation != 'RETRY-INSTALLER' }}
+        with:
+          node-version: '22'
+      - name: Full source regression, schema policy, offline release build
+        if: ${{ inputs.operation != 'RETRY-INSTALLER' }}
+        working-directory: frozen-source
+        env:
+          WRANGLER_SEND_METRICS: 'false'
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --ignore-scripts --no-audit --no-fund
+          node scripts/copy-webauthn-browser.mjs
+          node --test tests/*.test.js
+          node scripts/releases/build-release.mjs --check
+          node scripts/releases/build-release.mjs --build "$RELEASE_TAG" "$SOURCE_SHA"
+          dir=".release-work/$RELEASE_TAG"
+          test -s "$dir/release-manifest.json"
+          test -s "$dir/portal-worker-package.tar.gz"
+          test -s "$dir/schema-migrations.tar.gz"
+          # Reject all pilot-only family seeds and extra private files.
+          tar -tzf "$dir/schema-migrations.tar.gz" >/tmp/portal-schema-list
+          for forbidden in 0002_seed_family.sql 0006_system_admin.sql 0008_demo_recipes.sql 0013_seed_external_senders.sql 0092_allowance_clean_start_20261102.sql; do
+            if grep -Fq "/$forbidden" /tmp/portal-schema-list; then echo "::error::Family data seeded in generic release"; exit 1; fi
+          done
+          tar -xOzf "$dir/portal-worker-package.tar.gz" ./worker/index.js >/tmp/portal-worker.js
+          grep -Fq D1_UPGRADE_ /tmp/portal-worker.js
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {validateReleaseManifest} from './src/installer-release.js';
+          const m=validateReleaseManifest(JSON.parse(fs.readFileSync('.release-work/'+process.env.RELEASE_TAG+'/release-manifest.json')));
+          if(m.version!==process.env.RELEASE_TAG||m.sourceCommit!==process.env.SOURCE_SHA||
+            m.minFromVersion!==null||m.minSchema!==0||m.targetSchema!==2)
+            throw Error('New-family schema revision not yet supported by Installer');
+          console.log('Unsigned manifest and schema 2 source verified');
+          NODE
+      - name: Verify trusted signing identity; sign and independently check archived bytes
+        if: ${{ inputs.operation != 'RETRY-INSTALLER' }}
+        working-directory: frozen-source
+        env:
+          RELEASE_SIGNING_PRIVATE_KEY_PEM: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY_PEM }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {createHash,createPrivateKey,createPublicKey} from 'node:crypto';
+          const key=createPrivateKey(process.env.RELEASE_SIGNING_PRIVATE_KEY_PEM);
+          if(key.asymmetricKeyType!=='ed25519')throw Error('Signing identity is not Ed25519');
+          const raw=createPublicKey(key).export({format:'der',type:'spki'});
+          if(raw.subarray(0,12).toString('hex')!=='302a300506032b6570032100'||
+             raw.subarray(12).toString('hex')!==process.env.EXPECTED_PUBLIC_KEY)
+            throw Error('Signing identity does not match pinned trust root');
+          const dir='.release-work/'+process.env.RELEASE_TAG+'/';
+          const lock=fs.readFileSync('package-lock.json');
+          const digest=createHash('sha256').update(lock).digest('hex');
+          const m=JSON.parse(fs.readFileSync(dir+'release-manifest.json','utf8'));
+          m.notes.sv+=' Npm lock SHA-256 '+digest+'.';
+          fs.copyFileSync('package-lock.json',dir+'build-dependencies.lock.json');
+          fs.writeFileSync(dir+'release-manifest.json',JSON.stringify(m));
+          NODE
+          node scripts/releases/build-release.mjs --sign "$RELEASE_TAG"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {verifySignedRelease,verifyReleaseArtifact} from './src/installer-release.js';
+          const dir='.release-work/'+process.env.RELEASE_TAG+'/';
+          const m=await verifySignedRelease(
+            fs.readFileSync(dir+'release-manifest.json','utf8'),
+            fs.readFileSync(dir+'release-manifest.sig','utf8'),
+            process.env.EXPECTED_PUBLIC_KEY);
+          if(m.version!==process.env.RELEASE_TAG||m.sourceCommit!==process.env.SOURCE_SHA||
+             m.minFromVersion!==null||m.minSchema!==0||m.targetSchema!==2)
+             throw Error('Unexpected signed new-family release');
+          for(const a of m.artifacts)
+            await verifyReleaseArtifact(new Uint8Array(fs.readFileSync(dir+a.name)),a);
+          console.log('Ed25519 + both archive digests verified');
+          NODE
+      - name: Publish immutable signed release ONLY after exact upload hash audit
+        if: ${{ inputs.operation == 'PUBLISH' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir="frozen-source/.release-work/$RELEASE_TAG"
+          cat >/tmp/portal-release-notes.md <<'NOTES'
+          # Family Portal — signed universal release
+          Family-neutral Worker and clean schema-2 installation. Signatures,
+          binary SHA-256 and source commit have been checked independently.
+          No family Worker/D1 was changed by this publication.
+          Installer is updated by the subsequent audited delivery job.
+          NOTES
+          gh release create "$RELEASE_TAG" \
+            "$dir/portal-worker-package.tar.gz" \
+            "$dir/schema-migrations.tar.gz" \
+            "$dir/release-manifest.json" \
+            "$dir/release-manifest.sig" \
+            "$dir/build-dependencies.lock.json" \
+            --repo "$GH_REPO" --target main \
+            --title "Family Portal $RELEASE_TAG" \
+            --notes-file /tmp/portal-release-notes.md --draft
+          id=""
+          for n in $(seq 1 15); do
+            result=$(gh api "repos/$GH_REPO/releases?per_page=100" \
+              --jq ".[] | select(.tag_name == \"$RELEASE_TAG\" and .draft == true) | .id")
+            if [[ "$result" =~ ^[0-9]+$ ]]; then id="$result"; break; fi
+            sleep 2
+          done
+          [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::Draft lookup lag; do not create another release. Recover existing draft ID."; exit 1; }
+          expected='build-dependencies.lock.json,portal-worker-package.tar.gz,release-manifest.json,release-manifest.sig,schema-migrations.tar.gz'
+          names=$(gh api "repos/$GH_REPO/releases/$id" --jq '[.assets[].name] | sort | join(",")')
+          test "$names" = "$expected" || { echo "::error::Unexpected assets; draft held"; exit 1; }
+          for filename in portal-worker-package.tar.gz schema-migrations.tar.gz release-manifest.json release-manifest.sig build-dependencies.lock.json; do
+            remote=$(gh api "repos/$GH_REPO/releases/$id" --jq ".assets[] | select(.name == \"$filename\") | [.size,.digest,.state] | @tsv")
+            size=$(wc -c < "$dir/$filename")
+            hash="sha256:$(sha256sum "$dir/$filename" | cut -d' ' -f1)"
+            test "$remote" = "$(printf '%s\t%s\t%s' "$size" "$hash" 'uploaded')" || {
+              echo "::error::Upload checksum differs for $filename; unpublished draft remains"; exit 1;
+            }
+          done
+          gh api --method PATCH "repos/$GH_REPO/releases/$id" -F draft=false \
+            --jq '{id,tag_name,draft,published_at,html_url}'
+          test "$(gh api "repos/$GH_REPO/releases/$id" --jq .draft)" = false
+          echo "Published signed release $RELEASE_TAG. No Cloudflare write performed."
+      - name: Confirm VERIFY performs no GitHub publication or Cloudflare write
+        if: ${{ inputs.operation == 'VERIFY' }}
+        run: |
+          echo "Verified source, tests, Ed25519 signature and archive checksums for $RELEASE_TAG." >> "$GITHUB_STEP_SUMMARY"
+          echo "No release, tag, Worker or D1 changed." >> "$GITHUB_STEP_SUMMARY"
+
+  installer-delivery:
+    needs: [release]
+    if: ${{ github.repository == 'valfrid/nerenportal-releases' && github.actor == 'valfrid' && (inputs.operation == 'PUBLISH' || inputs.operation == 'RETRY-INSTALLER') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      GH_REPO: valfrid/nerenportal-releases
+      RELEASE_TAG: ${{ inputs.version }}
+      GH_TOKEN: ${{ secrets.PORTAL_INSTALLER_DISPATCH_TOKEN }}
+      PUBLIC_SIGNING_KEY: 609cf86cd1d2cc20e333f49c420af4f9c4bbc1771edc50ed1f5fe17fe6a0249a
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify published signed manifest directly from immutable GitHub Release
+        id: signed
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN" || { echo "::error::Source Actions-write dispatch token missing"; exit 1; }
+          test "$(gh api -H 'Accept: application/vnd.github+json' "repos/$GH_REPO/releases/tags/$RELEASE_TAG" --jq '.draft')" = false
+          mkdir -p /tmp/published
+          gh release download "$RELEASE_TAG" --repo "$GH_REPO" -p release-manifest.json -p release-manifest.sig -D /tmp/published
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import {verify,createPublicKey} from 'node:crypto';
+          const raw=fs.readFileSync('/tmp/published/release-manifest.json','utf8');
+          const sig=fs.readFileSync('/tmp/published/release-manifest.sig','utf8').trim();
+          const m=JSON.parse(raw);
+          const pub=createPublicKey({key:Buffer.concat([
+             Buffer.from('302a300506032b6570032100','hex'),
+             Buffer.from(process.env.PUBLIC_SIGNING_KEY,'hex')
+          ]),format:'der',type:'spki'});
+          if(JSON.stringify(m)!==raw||
+             !verify(null,Buffer.from(raw,'utf8'),pub,Buffer.from(sig,'base64url'))||
+             m.version!==process.env.RELEASE_TAG||
+             !/^[a-f0-9]{40}$/.test(m.sourceCommit)||
+             m.schemaVersion!==1||m.minSchema!==0||m.targetSchema!==2||
+             m.minFromVersion!==null||m.channel!=='stable'||m.product!=='family-portal')
+             throw Error('Published manifest signature or schema identity incorrect');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,'source_sha='+m.sourceCommit+'\n');
+          console.log('Published Ed25519 release signed '+m.version+' / '+m.sourceCommit);
+          NODE
+      - name: Send Installer delivery request to private source workflow
+        env:
+          VERIFIED_SOURCE_SHA: ${{ steps.signed.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n --arg v "$RELEASE_TAG" --arg s "$VERIFIED_SOURCE_SHA" --arg id "$GITHUB_RUN_ID" \
+            '{event_type:"family-portal-release-published",
+              client_payload:{version:$v,source_commit:$s,publisher_run_id:$id}}' \
+            >/tmp/installer-dispatch.json
+          gh api --method POST repos/valfrid/nerenportal/dispatches --input /tmp/installer-dispatch.json
+          echo "Sent signed release callback to private portal CI (no Cloudflare credential in publisher)."
+      - name: Require Installer delivery callback to complete successfully
+        shell: bash
+        run: |
+          set -euo pipefail
+          id=''
+          expected="Installer delivery from release run $GITHUB_RUN_ID"
+          for n in $(seq 1 20); do
+            id=$(gh api 'repos/valfrid/nerenportal/actions/runs?event=repository_dispatch&per_page=50' \
+              --jq ".workflow_runs[] | select(.display_title == \"$expected\") | .id" | head -n1)
+            if [[ "$id" =~ ^[0-9]+$ ]]; then break; fi
+            sleep 5
+          done
+          [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::Installer callback run not found"; exit 1; }
+          echo "Installer delivery CI run: https://github.com/valfrid/nerenportal/actions/runs/$id"
+          for n in $(seq 1 90); do
+            result=$(gh api "repos/valfrid/nerenportal/actions/runs/$id")
+            state=$(jq -r '.status' <<< "$result")
+            if [ "$state" = completed ]; then
+              outcome=$(jq -r '.conclusion' <<< "$result")
+              test "$outcome" = success || { echo "::error::Published $RELEASE_TAG but Installer update failed: $outcome. Use RETRY-INSTALLER; never republish."; exit 1; }
+              echo "SIGNED RELEASE + INSTALLER UPDATE COMPLETE ($RELEASE_TAG)." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::Published release, Installer callback still running. Recheck source workflow; retry delivery only if required."
+          exit 1
