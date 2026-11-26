@@ -61,6 +61,9 @@ jobs:
       RELEASE_TAG: ${{ inputs.version }}
       OPERATION: ${{ inputs.operation }}
       EXPECTED_PUBLIC_KEY: ${{ vars.RELEASE_SIGNING_PUBLIC_KEY }}
+      # Explicit schema-3 build/sign authorization is scoped to this protected
+      # owner-dispatched job. Future schema revisions require new review.
+      RELEASE_SCHEMA_APPROVAL: REVIEWED-SCHEMA-3
       PINNED_SOURCE_INPUT: ${{ inputs.source_sha }}
       SOURCE_TOKEN_PRESENT: ${{ secrets.PORTAL_SOURCE_READ_TOKEN != '' }}
       SIGNING_KEY_PRESENT: ${{ secrets.RELEASE_SIGNING_PRIVATE_KEY_PEM != '' }}
