@@ -17,6 +17,26 @@ export function nextPatch(version) {
  if(!Number.isSafeInteger(p)||p===Number.MAX_SAFE_INTEGER)throw Error('Version overflow');
  return 'v'+m[1]+'.'+m[2]+'.'+(p+1);
 }
+export function nextReviewedRelease(baseVersion,registry){
+ const base=SEMVER.exec(baseVersion||'');
+ if(!base||base[1]!=='1'||Number(base[2])<1)throw Error('Unsupported release baseline');
+ if(registry?.format!==1||registry.baseline?.revision!==2||!Array.isArray(registry.steps)||registry.targetRevision!==2+registry.steps.length)
+   throw Error('Invalid reviewed source schema registry');
+ let priorMinor=1;
+ for(const [i,step] of registry.steps.entries()){
+   const m=SEMVER.exec(step.introducedIn||'');
+   if(step.revision!==i+3||!m||m[1]!=='1'||m[3]!=='0'||Number(m[2])<=priorMinor||!(/^[a-f0-9]{64}$/.test(step.sha256||'')))
+     throw Error('Invalid schema migration release order');
+   priorMinor=Number(m[2]);
+ }
+ const future=registry.steps.filter(step=>Number(step.introducedIn.split('.')[1])>Number(base[2]));
+ if(future.length){
+   if(future.length!==1||Number(future[0].introducedIn.split('.')[1])!==Number(base[2])+1)
+     throw Error('Schema revision requires one reviewed next minor release');
+   return future[0].introducedIn;
+ }
+ return nextPatch(baseVersion);
+}
 export function validateCandidate(candidate,{nextVersion,baseVersion,sourceSha,verifyRunId}){
  if(!candidate||Object.keys(candidate).sort().join(',')!==
    'baseVersion,sourceSha,verifyRunId,version'||
@@ -69,9 +89,12 @@ function main() {
  const sourceSha=ghJson(['api','repos/valfrid/nerenportal/commits/main'],
     process.env.PRIVATE_SOURCE_TOKEN).sha;
  if(!/^[a-f0-9]{40}$/.test(sourceSha))throw Error('Invalid source HEAD');
- const nextVersion=nextPatch(baseVersion);
+ const registryFile=ghJson(['api','repos/valfrid/nerenportal/contents/schema/upgrade-registry.json?ref='+sourceSha],process.env.PRIVATE_SOURCE_TOKEN);
+ if(registryFile?.encoding!=='base64'||typeof registryFile.content!=='string'||registryFile.content.length>200000)throw Error('Cannot read frozen source schema registry');
+ const registry=JSON.parse(Buffer.from(registryFile.content,'base64').toString('utf8'));
+ const nextVersion=nextReviewedRelease(baseVersion,registry);
  if(requestedVersion&&requestedVersion!==nextVersion)
-   throw Error('Version override does not equal next patch: '+nextVersion);
+   throw Error('Version override does not equal next reviewed release: '+nextVersion);
  if(requestedSha&&requestedSha!==sourceSha)
    throw Error('Source override does not equal private main HEAD; re-VERIFY');
  // VERIFY and PUBLISH now resolve the same immutable source snapshot.
