@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {nextPatch,validateCandidate} from './resolve-release-candidate.mjs';
+import {nextPatch,nextReviewedRelease,validateCandidate} from './resolve-release-candidate.mjs';
 const sha='a'.repeat(40);
 test('next stable patch release increments only patch',()=>{
  assert.equal(nextPatch('v1.1.1'),'v1.1.2');
@@ -24,7 +24,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 
-function runResolver(operation,{requestedVersion='',requestedSha='',currentSha='a'.repeat(40)}={}) {
+function runResolver(operation,{requestedVersion='',requestedSha='',currentSha='a'.repeat(40),registry={format:1,baseline:{revision:2},targetRevision:2,steps:[]}}={}) {
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'portal-release-one-click-'));
  try {
    const ghStub=path.join(dir,'gh');
@@ -36,6 +36,8 @@ function runResolver(operation,{requestedVersion='',requestedSha='',currentSha='
      ' console.log(JSON.stringify({tag_name:"v1.1.4",draft:false,prerelease:false}));',
      'else if(args[1]==="repos/valfrid/nerenportal/commits/main")',
      ' console.log(JSON.stringify({sha:process.env.MOCK_SOURCE_SHA}));',
+     'else if(args[1]==="repos/valfrid/nerenportal/contents/schema/upgrade-registry.json?ref="+process.env.MOCK_SOURCE_SHA)',
+     ' console.log(JSON.stringify({encoding:"base64",content:Buffer.from(process.env.MOCK_REGISTRY).toString("base64")}));',
      'else if(args[1]==="repos/valfrid/nerenportal-releases/releases/tags/v1.1.4")',
      ' console.log(JSON.stringify({tag_name:"v1.1.4",draft:false,prerelease:false}));',
      'else {console.error("Unexpected request: "+args.join(" "));process.exit(51);}'
@@ -52,7 +54,7 @@ function runResolver(operation,{requestedVersion='',requestedSha='',currentSha='
          GITHUB_OUTPUT:outputs,
          GITHUB_ENV:path.join(dir,'env'),
          GITHUB_STEP_SUMMARY:path.join(dir,'summary'),
-         OPERATION:operation,MOCK_SOURCE_SHA:currentSha,
+         OPERATION:operation,MOCK_SOURCE_SHA:currentSha,MOCK_REGISTRY:JSON.stringify(registry),
          MANUAL_VERSION:requestedVersion,MANUAL_SOURCE_SHA:requestedSha
        }
      });
@@ -86,4 +88,17 @@ test('RETRY-INSTALLER stays pinned to an existing published release',()=>{
  assert.equal(result.status,0,result.stderr);
  assert.match(result.output,/version=v1\.1\.4/);
  assert.match(result.output,/source_sha=\n/);
+});
+
+const schema3={format:1,baseline:{revision:2},targetRevision:3,steps:[
+ {revision:3,introducedIn:'v1.2.0',sha256:'a'.repeat(64)}
+]};
+test('schema change automatically selects next minor rather than patch',()=>{
+ assert.equal(nextReviewedRelease('v1.1.33',schema3),'v1.2.0');
+ assert.equal(nextReviewedRelease('v1.2.0',schema3),'v1.2.1');
+ assert.throws(()=>nextReviewedRelease('v1.1.33',{...schema3,steps:[{...schema3.steps[0],introducedIn:'v1.3.0'}]}),/next minor/);
+ const result=runResolver('VERIFY',{registry:schema3});
+ assert.equal(result.status,0,result.stderr);
+ assert.match(result.output,/version=v1\.2\.0/);
+ assert.notEqual(runResolver('PUBLISH',{registry:schema3,requestedVersion:'v1.1.5'}).status,0);
 });

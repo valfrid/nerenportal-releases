@@ -12,7 +12,7 @@ on:
         options: [VERIFY, PUBLISH, RETRY-INSTALLER]
         default: PUBLISH
       version:
-        description: "Optional: automatically uses next patch version (for example v1.1.2). Required only for old-release retry"
+        description: "Optional: automatically selects next patch or reviewed schema minor. Required only for old-release retry"
         type: string
         required: false
         default: ''
@@ -170,11 +170,20 @@ jobs:
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import {validateReleaseManifest} from './src/installer-release.js';
+          const registry=JSON.parse(fs.readFileSync('schema/upgrade-registry.json','utf8'));
           const m=validateReleaseManifest(JSON.parse(fs.readFileSync('.release-work/'+process.env.RELEASE_TAG+'/release-manifest.json')));
           if(m.version!==process.env.RELEASE_TAG||m.sourceCommit!==process.env.SOURCE_SHA||
-            m.minFromVersion!==null||m.minSchema!==0||m.targetSchema!==2)
-            throw Error('New-family schema revision not yet supported by Installer');
-          console.log('Unsigned manifest and schema 2 source verified');
+            m.minFromVersion!==null||m.minSchema!==0||m.targetSchema!==registry.targetRevision)
+            throw Error('New-family schema revision differs from frozen reviewed registry');
+          if(m.targetSchema>2){
+            const {verifyVersionedInstallSchema}=await import('./src/installer-cloudflare-provision.js');
+            const {decompressVerifiedTar}=await import('./src/installer-tar.js');
+            const dir='.release-work/'+process.env.RELEASE_TAG+'/';
+            const worker=await decompressVerifiedTar(new Uint8Array(fs.readFileSync(dir+'portal-worker-package.tar.gz')));
+            const migrations=await decompressVerifiedTar(new Uint8Array(fs.readFileSync(dir+'schema-migrations.tar.gz')));
+            await verifyVersionedInstallSchema({manifest:m,releaseInfo:JSON.parse(new TextDecoder().decode(worker.get('release-info.json'))),migrations});
+          }
+          console.log('Unsigned manifest and reviewed schema '+m.targetSchema+' source verified');
           NODE
       - name: Verify trusted signing identity; sign and independently check archived bytes
         if: ${{ inputs.operation != 'RETRY-INSTALLER' }}
@@ -206,13 +215,14 @@ jobs:
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import {verifySignedRelease,verifyReleaseArtifact} from './src/installer-release.js';
+          const registry=JSON.parse(fs.readFileSync('schema/upgrade-registry.json','utf8'));
           const dir='.release-work/'+process.env.RELEASE_TAG+'/';
           const m=await verifySignedRelease(
             fs.readFileSync(dir+'release-manifest.json','utf8'),
             fs.readFileSync(dir+'release-manifest.sig','utf8'),
             process.env.EXPECTED_PUBLIC_KEY);
           if(m.version!==process.env.RELEASE_TAG||m.sourceCommit!==process.env.SOURCE_SHA||
-             m.minFromVersion!==null||m.minSchema!==0||m.targetSchema!==2)
+             m.minFromVersion!==null||m.minSchema!==0||m.targetSchema!==registry.targetRevision)
              throw Error('Unexpected signed new-family release');
           for(const a of m.artifacts)
             await verifyReleaseArtifact(new Uint8Array(fs.readFileSync(dir+a.name)),a);
@@ -246,7 +256,7 @@ jobs:
           dir="frozen-source/.release-work/$RELEASE_TAG"
           cat >/tmp/portal-release-notes.md <<'NOTES'
           # Family Portal — signed universal release
-          Family-neutral Worker and clean schema-2 installation. Regression tests,
+          Family-neutral Worker and reviewed clean schema installation. Regression tests,
           signing identity, Ed25519 signature, archive SHA-256 and exact source
           commit were verified in the same workflow run before publication.
           No family Worker/D1 was changed by this publication.
@@ -328,7 +338,7 @@ jobs:
              !verify(null,Buffer.from(raw,'utf8'),pub,Buffer.from(sig,'base64url'))||
              m.version!==process.env.RELEASE_TAG||
              !/^[a-f0-9]{40}$/.test(m.sourceCommit)||
-             m.schemaVersion!==1||m.minSchema!==0||m.targetSchema!==2||
+             m.schemaVersion!==1||m.minSchema!==0||!Number.isSafeInteger(m.targetSchema)||m.targetSchema<2||
              m.minFromVersion!==null||m.channel!=='stable'||m.product!=='family-portal')
              throw Error('Published manifest signature or schema identity incorrect');
           fs.appendFileSync(process.env.GITHUB_OUTPUT,'source_sha='+m.sourceCommit+'\n');
